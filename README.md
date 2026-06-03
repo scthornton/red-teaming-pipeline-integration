@@ -125,6 +125,15 @@ For a fast smoke test, narrow the scope with `--categories` (e.g. `--categories 
 
 The script writes `red_team_report.json` in the working directory. Exit codes: `0` pass, `1` policy violation, `2` error.
 
+## Proof It Works
+
+See [`docs/EVIDENCE.md`](docs/EVIDENCE.md) for a reproducible validation record:
+unit tests, the live category vocabulary, the policy gate evaluated on a real
+report, and a full end-to-end GitHub Actions run (with screenshot and the
+uploaded report artifact).
+
+[![Red Teaming Scan](https://github.com/scthornton/red-teaming-pipeline-integration/actions/workflows/red_teaming_scan.yml/badge.svg)](https://github.com/scthornton/red-teaming-pipeline-integration/actions/workflows/red_teaming_scan.yml)
+
 ## Companion Repos
 
 - [`model-security-pipeline-integration`](https://github.com/scthornton/model-security-pipeline-integration) — model artifact scanning (pre-deployment).
