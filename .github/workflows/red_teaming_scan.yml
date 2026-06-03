@@ -1,0 +1,125 @@
+name: Prisma AIRS Red Teaming Scan
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_uuid:
+        description: 'Red Teaming target UUID (must already exist in SCM)'
+        required: true
+      scan_type:
+        description: 'Scan flavor (STATIC = attack library)'
+        required: false
+        default: 'STATIC'
+        type: choice
+        options:
+          - STATIC
+          - DYNAMIC
+      categories:
+        description: 'STATIC only. Comma-separated category groups or subcategory ids to scan (e.g. SECURITY or PROMPT_INJECTION). Empty = full attack library.'
+        required: false
+        default: ''
+      max_asr_percent:
+        description: 'Maximum Attack Success Rate (percent) before the pipeline fails'
+        required: false
+        default: '5.0'
+      fail_on_categories:
+        description: 'Comma-separated category/subcategory names that fail the pipeline on any success (e.g. PROMPT_INJECTION,JAILBREAK). STATIC scans only.'
+        required: false
+        default: ''
+      max_wait_minutes:
+        description: 'How long to wait for the scan to finish before timing out'
+        required: false
+        default: '60'
+
+  # Optionally also run on a schedule for nightly red-team regression. Uncomment
+  # and adjust the cron to fit your environment. GitHub Actions runs scheduled
+  # workflows on the default branch only.
+  # schedule:
+  #   - cron: '0 6 * * *'  # 06:00 UTC daily
+
+jobs:
+  red_teaming_scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PRISMA_AIRS_CLIENT_ID: ${{ vars.PRISMA_AIRS_CLIENT_ID }}
+      PRISMA_AIRS_CLIENT_SECRET: ${{ secrets.PRISMA_AIRS_CLIENT_SECRET }}
+      PRISMA_AIRS_TSG_ID: ${{ vars.PRISMA_AIRS_TSG_ID }}
+      PRISMA_AIRS_TOKEN_ENDPOINT: ${{ vars.PRISMA_AIRS_TOKEN_ENDPOINT || 'https://auth.apps.paloaltonetworks.com/oauth2/access_token' }}
+      PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/data-plane' }}
+      PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/mgmt-plane' }}
+      MAX_ASR_PERCENT: ${{ inputs.max_asr_percent }}
+      FAIL_ON_CATEGORIES: ${{ inputs.fail_on_categories }}
+      MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests tenacity
+
+      - name: Run Prisma AIRS Red Teaming Scan
+        run: |
+          python redteam_scan.py \
+            --target-uuid "${{ inputs.target_uuid }}" \
+            --scan-type "${{ inputs.scan_type }}" \
+            --categories "${{ inputs.categories }}" \
+            --max-asr-percent "${{ inputs.max_asr_percent }}" \
+            --fail-on-categories "${{ inputs.fail_on_categories }}" \
+            --max-wait-minutes "${{ inputs.max_wait_minutes }}"
+
+      - name: Upload Scan Report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: red-team-scan-report
+          path: red_team_report.json
+
+      - name: Extract report summary
+        id: summary
+        if: always()
+        run: |
+          if [ ! -f red_team_report.json ]; then
+            echo "asr=unknown" >> "$GITHUB_OUTPUT"
+            echo "status=NO_REPORT" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # asr is already a percent in the report.
+          ASR=$(jq -r '(.asr // .asr_percent // (.stats // {}).asr // "unknown") | tostring' red_team_report.json)
+          STATUS=$(jq -r '.status // "UNKNOWN"' red_team_report.json)
+          echo "asr=${ASR}" >> "$GITHUB_OUTPUT"
+          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
+
+      - name: Comment on PR (if triggered from a PR)
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        env:
+          REPORT_STATUS: ${{ steps.summary.outputs.status }}
+          REPORT_ASR: ${{ steps.summary.outputs.asr }}
+        with:
+          script: |
+            const status = process.env.REPORT_STATUS;
+            const asr = process.env.REPORT_ASR;
+            const body = [
+              '### Prisma AIRS Red Teaming Scan',
+              '',
+              '- Status: `' + status + '`',
+              '- Attack Success Rate: `' + asr + '`',
+              '',
+              'Full report attached as the `red-team-scan-report` workflow artifact.',
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

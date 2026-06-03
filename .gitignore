@@ -1,0 +1,63 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Scan outputs (working artifacts; curated examples live in fixtures/)
+red_team_report.json
+model_scan_report.json
+*.log
+
+# Local tooling / session state
+.claude/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets and credentials
+.env
+*.pem
+*.key
+credentials.json
+
+# Model files (often large)
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.onnx
+*.pkl
+*.pickle
+models/

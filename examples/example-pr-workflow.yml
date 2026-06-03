@@ -1,0 +1,45 @@
+name: Prisma AIRS Red Teaming on PR
+
+# Example: red-team every PR against a staging target with strict policy.
+# Copy this into .github/workflows/ if you want PR-triggered scans alongside
+# (or instead of) the manual workflow_dispatch trigger in the main workflow.
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/llm/**'        # only run when LLM-touching code changes
+      - 'prompts/**'
+      - 'configs/llm.yaml'
+
+jobs:
+  red_teaming_scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      PRISMA_AIRS_CLIENT_ID: ${{ vars.PRISMA_AIRS_CLIENT_ID }}
+      PRISMA_AIRS_CLIENT_SECRET: ${{ secrets.PRISMA_AIRS_CLIENT_SECRET }}
+      PRISMA_AIRS_TSG_ID: ${{ vars.PRISMA_AIRS_TSG_ID }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - run: |
+          pip install requests tenacity
+          python redteam_scan.py \
+            --target-uuid "${{ vars.STAGING_TARGET_UUID }}" \
+            --scan-type STATIC \
+            --max-asr-percent 2.0 \
+            --fail-on-categories PROMPT_INJECTION,JAILBREAK \
+            --max-wait-minutes 45
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: red-team-scan-report-pr-${{ github.event.pull_request.number }}
+          path: red_team_report.json

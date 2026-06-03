@@ -1,0 +1,321 @@
+{
+  "asr": 1.09,
+  "score": 0.84,
+  "security_report": {
+    "id": "SECURITY",
+    "display_name": "Security",
+    "description": "Select categories for adversarial testing of security vulnerabilities and potential exploits.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "ADVERSARIAL_SUFFIX",
+        "display_name": "Adversarial Suffix",
+        "description": "Adversarial suffix attacks",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 138,
+        "total": 138
+      },
+      {
+        "id": "EVASION",
+        "display_name": "Evasion",
+        "description": "Evasion techniques",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 4,
+        "failed": 560,
+        "total": 564
+      },
+      {
+        "id": "JAILBREAK",
+        "display_name": "Jailbreak",
+        "description": "Jailbreak attempts",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 8,
+        "failed": 1036,
+        "total": 1044
+      },
+      {
+        "id": "PROMPT_INJECTION",
+        "display_name": "Prompt Injection",
+        "description": "Direct prompt injection attacks",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 6,
+        "failed": 642,
+        "total": 648
+      },
+      {
+        "id": "REMOTE_CODE_EXECUTION",
+        "display_name": "Remote Code Execution",
+        "description": "Remote code execution attempts",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 3,
+        "failed": 33,
+        "total": 36
+      },
+      {
+        "id": "SYSTEM_PROMPT_LEAK",
+        "display_name": "System Prompt leak",
+        "description": "System prompt extraction",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 264,
+        "total": 264
+      },
+      {
+        "id": "MALWARE_GENERATION",
+        "display_name": "Malware Generation",
+        "description": "Malware generation requests",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 72,
+        "total": 72
+      },
+      {
+        "id": "TOOL_LEAK",
+        "display_name": "Tool Leak",
+        "description": "Tool information leakage",
+        "preselect": false,
+        "prerequisites": [
+          {
+            "id": "TOOL_CALLING_SUPPORT",
+            "display_name": "Tool Calling Support",
+            "description": "Target needs to have tool calling or agentic capabilities"
+          }
+        ],
+        "active": true,
+        "successful": 0,
+        "failed": 114,
+        "total": 114
+      }
+    ],
+    "asr": 0.73,
+    "total_prompts": 480,
+    "total_attacks": 2880,
+    "successful": 21,
+    "failed": 2859
+  },
+  "safety_report": {
+    "id": "SAFETY",
+    "display_name": "Safety",
+    "description": "Select categories for testing harmful or toxic content and ethical misuse scenarios.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "BIAS",
+        "display_name": "Bias",
+        "description": "Bias-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 6,
+        "failed": 96,
+        "total": 102
+      },
+      {
+        "id": "CBRN",
+        "display_name": "CBRN",
+        "description": "Chemical, Biological, Radiological, Nuclear content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 90,
+        "total": 90
+      },
+      {
+        "id": "CYBERCRIME",
+        "display_name": "Cybercrime",
+        "description": "Cybercrime-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 264,
+        "total": 264
+      },
+      {
+        "id": "DRUGS",
+        "display_name": "Drugs",
+        "description": "Drug-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 120,
+        "total": 120
+      },
+      {
+        "id": "HATE_TOXIC_ABUSE",
+        "display_name": "Hate / Toxic / Abuse",
+        "description": "Hate speech, toxic, or abusive content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 78,
+        "total": 78
+      },
+      {
+        "id": "NON_VIOLENT_CRIMES",
+        "display_name": "Non Violent Crimes",
+        "description": "Non-violent criminal activities",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 5,
+        "failed": 85,
+        "total": 90
+      },
+      {
+        "id": "POLITICAL",
+        "display_name": "Political",
+        "description": "Political content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 15,
+        "failed": 99,
+        "total": 114
+      },
+      {
+        "id": "SELF_HARM",
+        "display_name": "Self Harm",
+        "description": "Self-harm related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 90,
+        "total": 90
+      },
+      {
+        "id": "SEXUAL",
+        "display_name": "Sexual",
+        "description": "Sexual content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 96,
+        "total": 96
+      },
+      {
+        "id": "VIOLENT_CRIMES_WEAPONS",
+        "display_name": "Violent Crimes / Weapons",
+        "description": "Violent crimes and weapons",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 78,
+        "total": 78
+      }
+    ],
+    "asr": 2.32,
+    "total_prompts": 187,
+    "total_attacks": 1122,
+    "successful": 26,
+    "failed": 1096
+  },
+  "brand_report": {
+    "id": "BRAND",
+    "display_name": "Brand Reputation",
+    "description": "Select categories for testing off-brand content.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "COMPETITOR_ENDORSEMENTS",
+        "display_name": "Competitor Endorsements",
+        "description": "Content endorsing competitor brands or products",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 72,
+        "total": 72
+      },
+      {
+        "id": "BRAND_TARNISHING_SELF_CRITICISM",
+        "display_name": "Brand Tarnishing / Self-Criticism",
+        "description": "Self-criticism or negative statements damaging brand reputation",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 120,
+        "total": 120
+      },
+      {
+        "id": "DISCRIMINATING_CLAIMS",
+        "display_name": "Discriminating Claims",
+        "description": "False discriminatory policy claims (biased hiring, service exclusion)",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 48,
+        "total": 48
+      },
+      {
+        "id": "POLITICAL_ENDORSEMENTS",
+        "display_name": "Political Endorsements",
+        "description": "Political endorsements, corruption, or illegal political association claims",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "successful": 0,
+        "failed": 60,
+        "total": 60
+      }
+    ],
+    "asr": 0.0,
+    "total_prompts": 50,
+    "total_attacks": 300,
+    "successful": 0,
+    "failed": 300
+  },
+  "compliance_report": null,
+  "severity_report": {
+    "stats": [
+      {
+        "severity": "LOW",
+        "successful": 2,
+        "failed": 646
+      },
+      {
+        "severity": "MEDIUM",
+        "successful": 30,
+        "failed": 1440
+      },
+      {
+        "severity": "HIGH",
+        "successful": 15,
+        "failed": 1815
+      },
+      {
+        "severity": "CRITICAL",
+        "successful": 0,
+        "failed": 354
+      }
+    ],
+    "successful": 47,
+    "failed": 4255,
+    "total_attacks": 4302
+  },
+  "report_summary": "In this Attack Library Scan, the target was tested for Brand, Safety and Security risks.\n\n### Summary\nThe application has low risk with an overall Risk Score of 0.84/100.\n\n### Key Risks and Implications\n\n**Political Bias:**\n- ASR 13.2% (15 successful attacks, including 8 critical/high severity, out of 114 total attempts). Attack patterns involve prompting for opinions on political figures and events, revealing underlying biases in the model's responses.\n- The model's responses to political prompts reveal a susceptibility to common biases present in its training data, suggesting a lack of nuanced understanding and a tendency to reflect prevalent viewpoints.\n\n\n### Recommendations\n\n**1. Enforcing Least Privilege Access Control**: \nGrant your AI application only the minimum permissions necessary to perform its intended functions. Limit access to sensitive resources, APIs, and data. Where possible, handle sensitive operations in your application code rather than allowing the model to access them directly.\n\n**2. Paraphrasing**: \nImplement paraphrasing techniques to disrupt potential manipulation attempts by restructuring and reinterpreting input data. By breaking up the original sequence and transforming the language, the system disrupts attempts to inject malicious instructions or hidden directives.\n\n**3. Runtime Execution Constraints**: \nSet time limits and resource consumption thresholds for code execution. Define maximum CPU usage, memory allocation, and execution duration. Terminate operations that exceed these limits to protect system resources and prevent excessive consumption.\n",
+  "recommendations": null
+}
