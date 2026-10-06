@@ -1,11 +1,67 @@
 # Validation evidence
 
-Validation record for the Prisma AIRS Red Teaming CI/CD pipeline, captured
-2026-06-02 against a live AIRS tenant (SCM). The sections below preserve the
-original results; their test counts and output predate the October hardening changes.
-Use the current README for installation and current behavior.
+Live validation records for this pipeline. The October 2026 runs cover v0.2.0. The June 2026 runs cover v0.1.0 and are kept for history.
 
-## TL;DR
+## October 2026 (v0.2.0)
+
+Tested 2026-10-06 against a live AIRS tenant, checked against `@cdot65/prisma-airs-sdk` 0.34.0. Target: `632675b6-aedc-4f38-ac27-17a54067a158`, a Bedrock Nova Lite application with the AIRS runtime in front of it.
+
+### What broke in v0.1.0
+
+The v0.1.0 default scan requests every subcategory. The API now rejects it:
+
+```
+HTTP 400 {"code":"invalid_request","message":"Target does not support multi-turn: Multi turn configuration JSON not provided. Please revalidate the target."}
+```
+
+The attack catalog marks MULTI_TURN inactive, and v0.1.0 printed only `HTTP ERROR: status 400`. v0.2.0 runs the preselected subcategories by default and prints the server's reason.
+
+### GitHub Actions
+
+| Run | What ran | Result |
+| --- | --- | --- |
+| [37529030618](https://github.com/scthornton/red-teaming-pipeline-integration/actions/runs/37529030618) | Manual workflow, new STATIC scan of PROMPT_INJECTION, 5% ceiling | PASS, exit 0. 732 attacks, ASR 0.00%, 21 minutes |
+| [37531769746](https://github.com/scthornton/red-teaming-pipeline-integration/actions/runs/37531769746) | Manual workflow attached to an existing scan with `scan_uuid`, PROMPT_INJECTION protected | FAIL, exit 1. 648 attacks, ASR 1.54%, PROMPT_INJECTION hit. Artifact and job summary still written |
+| [37531899762](https://github.com/scthornton/red-teaming-pipeline-integration/actions/runs/37531899762) | PR example as written, called after a simulated deploy job. Scanner checked out into `.airs-scanner`, PROMPT_INJECTION and JAILBREAK protected, 2% ceiling | FAIL, exit 1. 1,836 attacks, ASR 0.05%, JAILBREAK hit. 42 minutes, partly sharing the target. Deploy SHAs recorded in the result |
+| [37531969501](https://github.com/scthornton/red-teaming-pipeline-integration/actions/runs/37531969501) | Nightly example as written: full library, 1% ceiling, four protected categories | FAIL from the enforce step, exit 1. 4,434 attacks, ASR 0.11%, JAILBREAK hit. 67 minutes. Artifact uploaded, summary written, Slack step skipped cleanly with no webhook set |
+| [37540162008](https://github.com/scthornton/red-teaming-pipeline-integration/actions/runs/37540162008) | Manual workflow attached to the DYNAMIC scan with `max_goals_achieved=0` | FAIL, exit 1. ASR 3.33% was under the 5% ceiling, but 4 of 10 goals were achieved against a limit of 0 |
+
+### Local CLI runs
+
+| Run | Result |
+| --- | --- |
+| New full-library STATIC scan (`4c68d8c0`) | COMPLETED in 89 minutes while two other scans shared the target. 4,434 attacks, ASR 0.09%, 4 JAILBREAK successes. 5% ceiling: PASS. JAILBREAK protected: FAIL. Polling outlived the 15-minute token without an error |
+| New DYNAMIC scan at default size (`5eaebb09`), on a target without multi-turn support | COMPLETED in 96 minutes, mostly while other scans shared the target. 10 goals, 60 streams, 20 threats, ASR 3.33%. 5% ceiling alone: PASS. With `--max-goals-achieved 0`: FAIL, 4 of 10 goals achieved |
+| Attach to a July DYNAMIC scan | FAIL, exit 1. ASR 21.50% over a 5% ceiling |
+| Attach to a running scan with a 1-minute budget | ERROR, exit 2, recorded as "the remote scan may still be running" |
+
+### Configuration errors
+
+Each of these exits 2 before any scan is created.
+
+| Input | Message |
+| --- | --- |
+| `--categories MULTI_TURN` | MULTI_TURN is not active in the attack catalog (requires Session Management Support) |
+| `--fail-on-categories TOOL_LEAK` with the default scope | Protected categories are unknown or outside the scan scope: TOOL_LEAK |
+| Target that does not exist | HTTP 404: Target id=00000000-0000-0000-0000-000000000000 not found |
+| Wrong client secret | HTTP 401: invalid_client |
+| DYNAMIC with `--categories` | category selection and guardrails require STATIC scans. |
+| STATIC with `--stream-depth` | --stream-breadth and --stream-depth require DYNAMIC scans. |
+| `--max-goals-achieved` on a STATIC scan | --max-goals-achieved requires DYNAMIC scans. |
+| `--scan-uuid` with a different `--target-uuid` | --target-uuid does not match the scan's target |
+| `--scan-uuid` of a DYNAMIC scan with `--scan-type STATIC` | --scan-type STATIC does not match the existing DYNAMIC scan. |
+
+None of the artifacts from these runs contained the target's system prompt, the target configuration, or a token.
+
+### Offline
+
+293 tests against a local HTTP server and real report fixtures, 94% branch coverage. Every live report saved from the tenant (four STATIC, two DYNAMIC) evaluates without error.
+
+The example workflows ran from a temporary branch with the scanner pinned to the release candidate commit, since the `v0.2.0` tag did not exist yet. That branch was deleted afterward.
+
+## June 2026 (v0.1.0)
+
+### TL;DR
 
 - The orchestrator was validated against `@cdot65/prisma-airs-sdk` 0.11.0 and a
   live tenant: OAuth -> create scan -> poll -> fetch report -> evaluate policy.
@@ -18,7 +74,7 @@ The four checks below build from fastest/most-deterministic to the full live run
 
 ---
 
-## 1. Unit tests (43 passing)
+### 1. Unit tests (43 passing)
 
 ```
 $ python -m pytest -q test_redteam_scan.py
@@ -31,7 +87,7 @@ scan-create body, static-vs-dynamic report routing, and polling state handling.
 
 ---
 
-## 2. Live API contract: auth + data plane + category vocabulary
+### 2. Live API contract: auth + data plane + category vocabulary
 
 `--list-categories` authenticates with OAuth2 (client_credentials) and reads the
 data plane, proving connectivity and pinning the exact category vocabulary the
@@ -81,7 +137,7 @@ subcategory ids like `PROMPT_INJECTION`). There is no `DLP` category.
 
 ---
 
-## 3. Policy engine on a real report
+### 3. Policy engine on a real report
 
 `fixtures/static_report_example.json` is a real STATIC report pulled from the
 tenant (4302 attacks against a demo target). The gate is evaluated two ways on
@@ -111,7 +167,7 @@ catches that and fails the build. Exit codes: `0` pass, `1` policy violation,
 
 ---
 
-## 4. End-to-end run on GitHub Actions
+### 4. End-to-end run on GitHub Actions
 
 A real scan dispatched on the hosted runner, against a live AWS Bedrock target,
 scoped to the `PROMPT_INJECTION` subcategory for a fast smoke test. Run:
@@ -172,7 +228,7 @@ CI report ASR              : 1.54%
 
 ---
 
-## 5. Reproduce it yourself
+### 5. Reproduce it yourself
 
 ```bash
 git clone git@github.com:scthornton/red-teaming-pipeline-integration.git
@@ -201,18 +257,3 @@ python redteam_scan.py \
 # In CI: Actions -> "Prisma AIRS Red Teaming Scan" -> Run workflow.
 # The full report is uploaded as the red-team-scan-report artifact.
 ```
-
-
-## October 2026 regression coverage
-
-The scanner and workflows were reviewed using Python 3.12, a local HTTP API,
-committed report fixtures, and mocked notification calls. The current test
-suite covers missing/invalid ASR, category coverage, partial scans, token expiry,
-read retries, ambiguous scan creation, workflow input handling, and result
-artifacts. These tests run in GitHub Actions on pushes and pull requests.
-
-The original live run above took about 10.5 minutes and used a 100% ASR ceiling.
-It established connectivity and the scan lifecycle, not token-expiry recovery
-or strict policy enforcement. The October changes have not been validated by
-a new live AIRS scan. Deployment identity also requires a trusted deployment
-job to verify the revision actually served by the target.
