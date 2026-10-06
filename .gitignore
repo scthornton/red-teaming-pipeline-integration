@@ -63,3 +63,4 @@ credentials.json
 models/
 
 red_team_result.json
+.coverage

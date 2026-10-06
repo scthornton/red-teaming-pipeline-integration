@@ -1,0 +1,332 @@
+[
+  {
+    "id": "SECURITY",
+    "display_name": "Security",
+    "description": "Select categories for adversarial testing of security vulnerabilities and potential exploits.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "ADVERSARIAL_SUFFIX",
+        "display_name": "Adversarial Suffix",
+        "description": "Adversarial suffix attacks",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "EVASION",
+        "display_name": "Evasion",
+        "description": "Evasion techniques",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      },
+      {
+        "id": "INDIRECT_PROMPT_INJECTION",
+        "display_name": "Indirect Prompt Injection",
+        "description": "Indirect prompt injection attacks",
+        "preselect": false,
+        "prerequisites": [
+          {
+            "id": "INTERNET_SUPPORT",
+            "display_name": "Internet Support",
+            "description": "Target should be able to access internet"
+          }
+        ],
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "JAILBREAK",
+        "display_name": "Jailbreak",
+        "description": "Jailbreak attempts",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "MULTI_TURN",
+        "display_name": "Multi-turn",
+        "description": "Multi-turn conversation exploits",
+        "preselect": false,
+        "prerequisites": [
+          {
+            "id": "SESSION_SUPPORT",
+            "display_name": "Session Management Support",
+            "description": "Target needs to have session management. Currently, only OpenAI models are supported"
+          }
+        ],
+        "active": false,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "PROMPT_INJECTION",
+        "display_name": "Prompt Injection",
+        "description": "Direct prompt injection attacks",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "REMOTE_CODE_EXECUTION",
+        "display_name": "Remote Code Execution",
+        "description": "Remote code execution attempts",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": true
+      },
+      {
+        "id": "SYSTEM_PROMPT_LEAK",
+        "display_name": "System Prompt leak",
+        "description": "System prompt extraction",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "TOOL_LEAK",
+        "display_name": "Tool Leak",
+        "description": "Tool information leakage",
+        "preselect": false,
+        "prerequisites": [
+          {
+            "id": "TOOL_CALLING_SUPPORT",
+            "display_name": "Tool Calling Support",
+            "description": "Target needs to have tool calling or agentic capabilities"
+          }
+        ],
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      },
+      {
+        "id": "MALWARE_GENERATION",
+        "display_name": "Malware Generation",
+        "description": "Malware generation requests",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": true
+      }
+    ]
+  },
+  {
+    "id": "SAFETY",
+    "display_name": "Safety",
+    "description": "Select categories for testing harmful or toxic content and ethical misuse scenarios.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "BIAS",
+        "display_name": "Bias",
+        "description": "Bias-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": true
+      },
+      {
+        "id": "CBRN",
+        "display_name": "CBRN",
+        "description": "Chemical, Biological, Radiological, Nuclear content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      },
+      {
+        "id": "CYBERCRIME",
+        "display_name": "Cybercrime",
+        "description": "Cybercrime-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "DRUGS",
+        "display_name": "Drugs",
+        "description": "Drug-related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      },
+      {
+        "id": "HATE_TOXIC_ABUSE",
+        "display_name": "Hate / Toxic / Abuse",
+        "description": "Hate speech, toxic, or abusive content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": true
+      },
+      {
+        "id": "NON_VIOLENT_CRIMES",
+        "display_name": "Non Violent Crimes",
+        "description": "Non-violent criminal activities",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "POLITICAL",
+        "display_name": "Political",
+        "description": "Political content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": true
+      },
+      {
+        "id": "SELF_HARM",
+        "display_name": "Self Harm",
+        "description": "Self-harm related content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      },
+      {
+        "id": "SEXUAL",
+        "display_name": "Sexual",
+        "description": "Sexual content",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "VIOLENT_CRIMES_WEAPONS",
+        "display_name": "Violent Crimes / Weapons",
+        "description": "Violent crimes and weapons",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": false
+      }
+    ]
+  },
+  {
+    "id": "BRAND",
+    "display_name": "Brand Reputation",
+    "description": "Select categories for testing off-brand content.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "COMPETITOR_ENDORSEMENTS",
+        "display_name": "Competitor Endorsements",
+        "description": "Content endorsing competitor brands or products",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "BRAND_TARNISHING_SELF_CRITICISM",
+        "display_name": "Brand Tarnishing / Self-Criticism",
+        "description": "Self-criticism or negative statements damaging brand reputation",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "DISCRIMINATING_CLAIMS",
+        "display_name": "Discriminating Claims",
+        "description": "False discriminatory policy claims (biased hiring, service exclusion)",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      },
+      {
+        "id": "POLITICAL_ENDORSEMENTS",
+        "display_name": "Political Endorsements",
+        "description": "Political endorsements, corruption, or illegal political association claims",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": true,
+        "audio_supported": true
+      }
+    ]
+  },
+  {
+    "id": "COMPLIANCE",
+    "display_name": "Compliance",
+    "description": "Select framework to understand compliance across security and safety standards.",
+    "preselect": true,
+    "sub_categories": [
+      {
+        "id": "OWASP",
+        "display_name": "OWASP Top 10 for LLMs",
+        "description": "Open Web Application Security Project",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "MITRE_ATLAS",
+        "display_name": "MITRE ATLAS",
+        "description": "MITRE Adversarial Tactics, Techniques, and Common Knowledge",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "NIST",
+        "display_name": "NIST AI-RMF",
+        "description": "National Institute of Standards and Technology Cybersecurity Framework",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      },
+      {
+        "id": "DASF_V2",
+        "display_name": "DASF V2.0",
+        "description": "Databricks AI Security Framework V2.0",
+        "preselect": true,
+        "prerequisites": null,
+        "active": true,
+        "file_supported": false,
+        "audio_supported": false
+      }
+    ]
+  }
+]

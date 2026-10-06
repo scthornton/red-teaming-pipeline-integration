@@ -1,107 +1,84 @@
 # Prisma AIRS Red Teaming CI/CD Pipeline
 
-Run Prisma AIRS Red Teaming against a registered target and evaluate the results as a CI gate. The scanner supports STATIC attack-library scans and DYNAMIC agent scans.
+Runs a Prisma AIRS AI Red Teaming scan against a target registered in Strata Cloud Manager and turns the result into a CI pass or fail. Supports Attack Library (STATIC) and Agent (DYNAMIC) scans.
 
-The gate returns success only after a completed scan has a valid ASR within policy. STATIC scans can also fail on successful attacks in protected categories. Invalid reports, missing category evidence, partial completion, and configuration errors fail the gate.
+The scanner tests an application that is already deployed. It does not deploy anything.
 
-This project scans an existing deployed application. It does not deploy the application or independently discover which source revision it serves.
+## How it works
 
-## Quick start
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
+sequenceDiagram
+    autonumber
+    participant CI as CI job<br/>(GitHub Actions)
+    participant A as SCM auth
+    participant S as redteam_scan.py
+    participant RT as AIRS Red Teaming
+    participant T as Your app<br/>(registered target)
 
-1. Register and validate a target in Strata Cloud Manager. For a private target, configure the required Network Channel.
-2. Set the Actions secret `PRISMA_AIRS_CLIENT_SECRET` and repository variables `PRISMA_AIRS_CLIENT_ID` and `PRISMA_AIRS_TSG_ID`.
-3. Open **Actions > Prisma AIRS Red Teaming Scan > Run workflow** and enter the target UUID.
-4. Review the job summary and the `red-team-scan-report` artifact.
-
-The manual workflow uses a 5% ASR ceiling by default. Choose policy thresholds for your application and risk tolerance. A passing scan is evidence for the tested attack scope, not proof that the application is secure.
-
-## Local usage
-
-Python 3.12 is the tested runtime. Install into a virtual environment:
-
-```bash
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install -r requirements.txt
-
-export PRISMA_AIRS_CLIENT_ID='your-client-id'
-export PRISMA_AIRS_CLIENT_SECRET='your-client-secret'
-export PRISMA_AIRS_TSG_ID='your-tsg-id'
-
-python redteam_scan.py --list-targets
-python redteam_scan.py --list-categories
-
-python redteam_scan.py \
-  --target-uuid 'your-target-uuid' \
-  --scan-type STATIC \
-  --max-asr-percent 5 \
-  --fail-on-categories PROMPT_INJECTION,JAILBREAK
+    CI->>S: target UUID and policy
+    S->>A: POST /oauth2/access_token
+    A-->>S: bearer token, refreshed on 401 or 403
+    alt new scan
+        S->>RT: GET /v1/categories (STATIC)
+        RT-->>S: catalog, preselected subcategories
+        S->>RT: POST /v1/scan
+        RT-->>S: scan UUID, saved to red_team_result.json
+    else --scan-uuid
+        S->>RT: GET /v1/scan/{uuid}
+        RT-->>S: type, target, and scope of the existing scan
+    end
+    par AIRS attacks the target
+        RT->>T: attack prompts
+        T-->>RT: responses, graded by AIRS
+        Note over RT,T: about 10 minutes for one subcategory,<br/>60 to 90 for the full library
+    and the scanner waits
+        loop every poll interval, until a terminal status
+            S->>RT: GET /v1/scan/{uuid}
+            RT-->>S: QUEUED, RUNNING, COMPLETED
+        end
+    end
+    S->>RT: GET /v1/report/{static or dynamic}/{uuid}/report
+    RT-->>S: ASR, plus category and severity results<br/>or goals achieved
+    S->>S: apply the gate
+    Note right of S: PASS needs a completed scan,<br/>executed attacks, ASR within the ceiling,<br/>no hit in a protected category,<br/>and achieved goals within the limit
+    S-->>CI: exit 0 PASS, 1 FAIL, 2 ERROR<br/>red_team_report.json, red_team_result.json
 ```
 
-`--list-targets` follows the API pagination instead of stopping at the first 100 targets.
+## How the gate decides
 
-Runtime dependencies and their transitive dependencies are pinned in `requirements.txt`. Dependabot checks dependency and GitHub Actions updates weekly.
-
-## Policy behavior
-
-| Condition | Exit code | Result |
+| Exit | Verdict | When |
 | --- | --- | --- |
-| Completed scan, valid evidence, within policy | `0` | `PASS` |
-| ASR above the ceiling or a protected category succeeded | `1` | `FAIL` |
-| Invalid or missing evidence, partial scan, configuration, API, or output error | `2` | `ERROR` |
+| 0 | PASS | The scan completed, attacks actually ran, ASR is at or below the ceiling, no protected category had a successful attack, and (agent scans) achieved goals are within the limit |
+| 1 | FAIL | ASR is above the ceiling, a protected category had a successful attack, or the attacker achieved more goals than allowed |
+| 2 | ERROR | Anything else: bad configuration, API error, timeout, partial scan, or a report that shows no executed attacks |
 
-ASR is a percentage, not a fraction: `1.09` means 1.09%. Both the measured ASR and threshold must be finite numbers from 0 to 100. Equality with the threshold passes.
+ASR is a percentage, so `1.09` means 1.09%. A scan that completes with zero executed attacks is an error, not a pass. Protected categories (`--fail-on-categories`) work with STATIC scans only, and each one has to be in the scan's scope and show executed attacks in the report.
 
-Category names are case-insensitive; spaces are normalized to underscores. Use the vocabulary returned by `--list-categories`. Supported group names are `SECURITY`, `SAFETY`, `BRAND`, and `COMPLIANCE`. Framework and subcategory IDs are accepted when present in the selected scan vocabulary.
+For agent (DYNAMIC) scans, set `--max-goals-achieved`, usually to 0. ASR alone can look fine while the attacker got what it wanted: a live agent scan in testing came in at 3.33% ASR, under a 5% ceiling, with 4 of its 10 attacker goals achieved.
 
-Every protected category must be included in the scan scope and have measured results in the report. Unknown names, missing success counts, and categories outside the selected scope are errors. For example, scanning only `JAILBREAK` while protecting `PROMPT_INJECTION` is rejected before scan creation.
+A pass means the target held up against the attacks that ran. It does not prove the application is secure.
 
-DYNAMIC scans do not provide the STATIC category breakdown. Combining DYNAMIC with either `--categories` or `--fail-on-categories` is rejected. CUSTOM scans are not supported by this integration.
+## Use it in your repository
 
-`PARTIALLY_COMPLETE` is an error, even if its available results look clean. The artifact preserves the terminal job state for investigation.
+Copy an example into `.github/workflows/`:
 
-## CLI configuration
+- [example-nightly-workflow.yml](examples/example-nightly-workflow.yml) runs the full attack library every night and can post to Slack when it fails.
+- [example-pr-workflow.yml](examples/example-pr-workflow.yml) is a reusable workflow you call after a deployment job. It scans PROMPT_INJECTION and JAILBREAK only, so it finishes in PR time.
 
-| Option | Default | Purpose |
+Both check out this scanner at a pinned release (`v0.2.0`) into `.airs-scanner`. Nothing needs to be copied into your repository besides the workflow file. To use a fork, change `repository` and `ref` in the checkout step.
+
+Add these in your repository settings:
+
+| Name | Kind | Value |
 | --- | --- | --- |
-| `--target-uuid` | Required for scans | Existing registered AIRS target |
-| `--scan-type` | `STATIC` | `STATIC`, `DYNAMIC`, or legacy `ATTACK_LIBRARY` alias |
-| `--scan-name` | Generated from scan type | Human-readable job name |
-| `--categories` | All available categories | STATIC groups or subcategory IDs, comma-separated |
-| `--max-asr-percent` | `5.0` | Maximum allowed ASR |
-| `--fail-on-categories` | Empty | STATIC categories that fail on any success |
-| `--poll-interval` | `30` seconds | Positive interval between polls |
-| `--max-wait-minutes` | `60` | Positive polling budget |
-| `--report-out` | `red_team_report.json` | Raw report or unsuccessful terminal state |
-| `--result-out` | `red_team_result.json` | Scan identity, policy, status, and verdict |
-| `--expected-sha` | Unset | Full commit SHA that must be deployed |
-| `--deployed-sha` | Unset | Full commit SHA verified by a trusted deployment job |
+| `PRISMA_AIRS_CLIENT_ID` | Variable | Service account client ID |
+| `PRISMA_AIRS_TSG_ID` | Variable | Tenant service group ID |
+| `PRISMA_AIRS_CLIENT_SECRET` | Secret | Service account secret |
+| `PROD_TARGET_UUID` | Variable | Target for the nightly example |
+| `SLACK_WEBHOOK_URL` | Secret | Optional, nightly failure alerts |
 
-The two SHA options must be supplied together and match. They check the caller's deployment evidence; they do not query the application to verify its revision.
-
-Environment defaults are also supported: `MAX_ASR_PERCENT`, `FAIL_ON_CATEGORIES`, `SCAN_CATEGORIES`, `POLL_INTERVAL_SECONDS`, and `MAX_WAIT_MINUTES`. CLI options take precedence. Empty numeric environment variables use the built-in defaults.
-
-Optional endpoint variables:
-
-| Variable | Default |
-| --- | --- |
-| `PRISMA_AIRS_TOKEN_ENDPOINT` | `https://auth.apps.paloaltonetworks.com/oauth2/access_token` |
-| `PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT` | `https://api.sase.paloaltonetworks.com/ai-red-teaming/data-plane` |
-| `PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT` | `https://api.sase.paloaltonetworks.com/ai-red-teaming/mgmt-plane` |
-
-`TSG_ID` is accepted as a fallback for `PRISMA_AIRS_TSG_ID`. Endpoint overrides are trusted configuration; use the correct HTTPS endpoints for your region.
-
-## Workflows
-
-### Manual and scheduled scans
-
-The installed workflow is manual by default. To enable its commented schedule, first configure `RED_TEAM_TARGET_UUID`. Scheduled runs use STATIC, all categories, a 5% ASR ceiling, and a 60-minute polling budget. The manual workflow limits its polling budget to 75 minutes so the 90-minute job has time for setup and artifacts.
-
-For a stricter nightly policy, copy [the nightly example](examples/example-nightly-workflow.yml) into `.github/workflows/`, configure `PROD_TARGET_UUID`, and optionally set the `SLACK_WEBHOOK_URL` secret. The workflow preserves scan failures after upload and notification. Missing reports do not prevent notification; a missing webhook simply skips it.
-
-### Scanning a PR deployment
-
-[The deployment example](examples/example-pr-workflow.yml) is a reusable workflow, not a standalone `pull_request` trigger. Copy it into `.github/workflows/` and call it after your trusted deployment job:
+Calling the PR example from a deployment workflow:
 
 ```yaml
 red_team:
@@ -115,37 +92,99 @@ red_team:
     PRISMA_AIRS_CLIENT_SECRET: ${{ secrets.PRISMA_AIRS_CLIENT_SECRET }}
 ```
 
-Your deployment job must read back the running application's revision and emit `verified_running_sha`. Do not fill that output by copying the requested SHA. Use an isolated target per PR, or keep the complete deployment and scan sequence serialized so another deployment cannot replace the target mid-scan. The scanner's concurrency group serializes scans only.
+The deploy job has to read the running revision back from the application and output it as `verified_running_sha`. Copying the requested SHA into that output defeats the check. Give each PR its own target, or run deploy and scan under one concurrency group. Name that group something other than `red-team-target-<uuid>`, which the scan job already holds, or GitHub cancels the run as a deadlock.
 
-The example checks out the trusted scanner from `main`. Keep secrets out of untrusted PR code and do not use `pull_request_target` to run PR code with credentials. Adapt the trusted branch name if your repository uses a different default branch.
+Self-hosted runners need Actions Runner 2.327.1 or later for the pinned Node 24 actions.
 
-These workflows write job summaries. They do not post PR comments.
+## Run it from this repository
 
-## Results and recovery
+Go to Actions > Prisma AIRS Red Teaming Scan > Run workflow and enter a target UUID. Leave categories empty for the full library, or name a few for a faster scan. Fill in `scan_uuid` to evaluate a scan that already exists instead of starting a new one. To run it on a schedule, uncomment the `schedule` block and set the `RED_TEAM_TARGET_UUID` variable.
 
-`red_team_report.json` contains the raw API report, or the final state for an unsuccessful scan. `red_team_result.json` records the target and scan UUIDs, selected categories, configured policy, terminal status, verdict, exit code, timestamps, and available workflow/deployment identifiers.
-
-The result is checkpointed immediately after scan creation. If monitoring fails, use the recorded UUID to inspect the existing scan in SCM. Starting the CLI again creates a new scan; there is no resume command. A CI timeout or cancellation does not cancel the remote scan.
-
-Expired tokens are refreshed once after a 401 on each API operation. Safe reads retry temporary connection failures, timeouts, HTTP 429, and selected 5xx responses, with at most three failed attempts. Retry-After is honored within the polling budget; waits above two minutes fail instead of retrying early. Scan creation is not retried after an ambiguous transport failure or 5xx response. Check SCM before submitting another scan.
-
-Artifacts are retained for 14 days in the supplied workflows. Reports may contain sensitive security findings; choose repository access and retention accordingly. New scans remove an older report at the configured output path, preventing stale evidence from being uploaded after a failure. Argument parsing failures can occur before a result artifact is written.
-
-## Development and validation
+## Run it locally
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m pip check
-python -m pytest -q
-python -m pytest --cov=redteam_scan --cov=ci_report --cov-branch
+python3 -m venv .venv && . .venv/bin/activate
+pip install -r requirements.txt
+export PRISMA_AIRS_CLIENT_ID=... PRISMA_AIRS_CLIENT_SECRET=... PRISMA_AIRS_TSG_ID=...
+
+python redteam_scan.py --list-targets
+python redteam_scan.py --list-categories
+python redteam_scan.py --target-uuid <uuid> --categories PROMPT_INJECTION --fail-on-categories PROMPT_INJECTION
 ```
 
-The Tests workflow runs on pushes to `main` and on PRs. Tests cover policy validation, local HTTP scan lifecycles, token refresh, retry boundaries, result artifacts, shell input handling, and nightly failure propagation. They use dummy credentials and mocked notifications.
+Tested on Python 3.12.
 
-[The evidence record](docs/EVIDENCE.md) preserves the original June 2026 live run and explains the later offline regression checks. The recent fixes still need validation against your designated live target and deployment system.
+## Scan scope
 
-## Companion and license
+With no `--categories`, a STATIC scan runs the subcategories SCM preselects in its UI. Naming a group (`SECURITY`, `SAFETY`, `BRAND`, `COMPLIANCE`) runs that group's preselected subcategories. Name a subcategory to add one that is not preselected, such as `TOOL_LEAK` (target needs tool calling) or `INDIRECT_PROMPT_INJECTION` (target needs internet access). `MULTI_TURN` is inactive in the catalog right now and is rejected. `--list-categories` shows which subcategories are inactive or not preselected.
 
-[model-security-pipeline-integration](https://github.com/scthornton/model-security-pipeline-integration) covers model artifact scanning. This repository covers behavioral testing of deployed targets.
+DYNAMIC scans run 6 streams per goal at depth 10 unless you set `--stream-breadth` and `--stream-depth`. They have no category breakdown, so `--categories` and `--fail-on-categories` are rejected for DYNAMIC.
 
-MIT. See [SECURITY.md](SECURITY.md) for reporting security issues.
+## How long scans take
+
+Measured on 2026-10-06 against a Bedrock Nova Lite application with the AIRS runtime in front of it:
+
+| Scan | Size | Time |
+| --- | --- | --- |
+| STATIC, PROMPT_INJECTION only | 226 attack units | about 10 minutes |
+| STATIC, full preselected library | 1,568 attack units (4,434 attacks) | 60 to 90 minutes |
+| DYNAMIC, default size | 60 streams | DYNAMIC_TIME |
+
+Time depends on how fast the target answers and on any rate limit set on the target. Scans that run against the same target at the same time slow each other down: the full library took 89 minutes while two other scans shared the target, and was on pace for about 60 alone. The manual workflow waits up to 240 minutes by default (300 at most) inside a 330-minute job. GitHub-hosted jobs stop at 360 minutes.
+
+## Options
+
+| Option | Default | Notes |
+| --- | --- | --- |
+| `--target-uuid` | | Required for a new scan |
+| `--scan-uuid` | | Evaluate an existing scan. Type, target, and scope come from that scan |
+| `--scan-type` | `STATIC` | `STATIC` or `DYNAMIC` |
+| `--scan-name` | generated | 3 to 255 characters |
+| `--categories` | preselected | STATIC only |
+| `--stream-breadth`, `--stream-depth` | 6, 10 | DYNAMIC only |
+| `--max-goals-achieved` | not checked | DYNAMIC only. Fail when more attacker goals than this were achieved |
+| `--max-asr-percent` | 5 | 0 to 100. Equal to the ceiling passes |
+| `--fail-on-categories` | none | STATIC only |
+| `--poll-interval` | 30 seconds | |
+| `--max-wait-minutes` | 60 | |
+| `--report-out` | `red_team_report.json` | |
+| `--result-out` | `red_team_result.json` | |
+| `--expected-sha`, `--deployed-sha` | | Full SHAs, given together, must match |
+
+`MAX_ASR_PERCENT`, `FAIL_ON_CATEGORIES`, `MAX_GOALS_ACHIEVED`, `SCAN_CATEGORIES`, `POLL_INTERVAL_SECONDS`, and `MAX_WAIT_MINUTES` set defaults from the environment; flags win. `PRISMA_AIRS_TOKEN_ENDPOINT`, `PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT`, and `PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT` override the API endpoints. `TSG_ID` works in place of `PRISMA_AIRS_TSG_ID`.
+
+## Output
+
+`red_team_result.json` is written when the run starts and again as soon as the scan is created, so the scan UUID survives a crash or timeout. It records the scanner version, target, scan, policy, final status, verdict, exit code, ASR, and any error. `red_team_report.json` holds the raw AIRS report, or a short job summary if the scan did not complete. The job summary leaves out the target configuration, which contains the target's system prompt.
+
+`ci_report.py summary` writes the GitHub job summary. `ci_report.py enforce` exits 0 only for a PASS result from the current workflow run.
+
+Reports describe weaknesses in your application, so treat artifacts accordingly. The workflows keep them for 14 days.
+
+## When a run times out or fails
+
+Cancelling or timing out the CI job does not stop the scan in AIRS, and rerunning the workflow starts a new scan that costs target tokens again. Evaluate the one that is already running instead:
+
+```bash
+python redteam_scan.py --scan-uuid <scan_uuid from red_team_result.json> --fail-on-categories PROMPT_INJECTION
+```
+
+The scanner refreshes its token once when a request gets a 401 or 403, and retries reads up to three times on connection errors, timeouts, 429, and 5xx. It never retries scan creation. If creation times out or returns a 5xx, the scan may exist anyway, so check SCM before starting another.
+
+Errors you may see:
+
+- `HTTP 400: Target does not support multi-turn...` means the scan asked for `MULTI_TURN`, or the target needs to be revalidated in SCM.
+- `HTTP 403 {"msg":"Access denied"}` from the Red Teaming API usually means a wrong path or HTTP method, not a permissions problem. Check any endpoint overrides first.
+- `HTTP 401: invalid_client` means a wrong client ID or secret.
+- An ASR near zero on a target you expected to be weak can mean the target is broken. A target that returns HTTP 200 with an error in the body, such as a retired model, makes every attack look refused. Send it a test prompt before trusting the result.
+
+## Development
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest -q
+```
+
+The Tests workflow runs the suite and actionlint on every push to `main` and every PR. The tests use a local HTTP server and real report fixtures and need no credentials. [docs/EVIDENCE.md](docs/EVIDENCE.md) records the live validation runs.
+
+[model-security-pipeline-integration](https://github.com/scthornton/model-security-pipeline-integration) covers model artifact scanning. MIT license. See [SECURITY.md](SECURITY.md) to report a vulnerability.

@@ -40,8 +40,10 @@ def test_build_job_metadata_static_selects_all_categories():
     assert rs.build_job_metadata("STATIC") == {"categories": {}}
 
 
-def test_build_job_metadata_dynamic_is_empty():
-    assert rs.build_job_metadata("DYNAMIC") == {}
+def test_build_job_metadata_dynamic_sends_explicit_scan_size():
+    assert rs.build_job_metadata("DYNAMIC") == {"stream_breadth": 6, "stream_depth": 10}
+    assert rs.build_job_metadata("DYNAMIC", stream_breadth=2, stream_depth=3) == {"stream_breadth": 2, "stream_depth": 3}
+    assert rs.build_job_metadata("DYNAMIC", stream_depth=4) == {"stream_breadth": 6, "stream_depth": 4}
 
 
 # --- build_static_categories ----------------------------------------------
@@ -175,14 +177,17 @@ def test_category_hits_handles_missing():
 
 # --- evaluate_policy -------------------------------------------------------
 
+# Every evaluated STATIC report must show executed attacks.
+EVIDENCE = {"brand_report": {"id": "BRAND", "total_attacks": 100, "successful": 0, "failed": 100, "sub_categories": []}}
+
 
 def test_evaluate_policy_passes_when_below_threshold():
-    report = {"asr": 2.0}  # 2% < 5%
+    report = {"asr": 2.0, **EVIDENCE}  # 2% < 5%
     assert rs.evaluate_policy(report, max_asr_percent=5.0, fail_on_categories=set()) is False
 
 
 def test_evaluate_policy_fails_on_asr_overshoot():
-    report = {"asr": 8.0}  # 8% > 5%
+    report = {"asr": 8.0, **EVIDENCE}  # 8% > 5%
     assert rs.evaluate_policy(report, max_asr_percent=5.0, fail_on_categories=set()) is True
 
 
@@ -192,6 +197,7 @@ def test_evaluate_policy_fails_on_protected_category_hit():
         "security_report": {
             "id": "SECURITY",
             "successful": 1,
+            "total_attacks": 10,
             "sub_categories": [{"id": "PROMPT_INJECTION", "successful": 1}],
         },
     }
@@ -205,8 +211,8 @@ def test_evaluate_policy_passes_when_protected_category_clean():
             "id": "SECURITY",
             "successful": 2,
             "sub_categories": [
-                {"id": "PROMPT_INJECTION", "successful": 0},
-                {"id": "JAILBREAK", "successful": 2},
+                {"id": "PROMPT_INJECTION", "successful": 0, "failed": 6, "total": 6},
+                {"id": "JAILBREAK", "successful": 2, "failed": 4, "total": 6},
             ],
         },
     }
