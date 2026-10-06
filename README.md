@@ -4,6 +4,47 @@ Runs a Prisma AIRS AI Red Teaming scan against a target registered in Strata Clo
 
 The scanner tests an application that is already deployed. It does not deploy anything.
 
+## How it works
+
+```mermaid
+%%{init: {"sequence": {"mirrorActors": false}}}%%
+sequenceDiagram
+    autonumber
+    participant CI as CI job<br/>(GitHub Actions)
+    participant A as SCM auth
+    participant S as redteam_scan.py
+    participant RT as AIRS Red Teaming
+    participant T as Your app<br/>(registered target)
+
+    CI->>S: target UUID and policy
+    S->>A: POST /oauth2/access_token
+    A-->>S: bearer token, refreshed on 401 or 403
+    alt new scan
+        S->>RT: GET /v1/categories (STATIC)
+        RT-->>S: catalog, preselected subcategories
+        S->>RT: POST /v1/scan
+        RT-->>S: scan UUID, saved to red_team_result.json
+    else --scan-uuid
+        S->>RT: GET /v1/scan/{uuid}
+        RT-->>S: type, target, and scope of the existing scan
+    end
+    par AIRS attacks the target
+        RT->>T: attack prompts
+        T-->>RT: responses, graded by AIRS
+        Note over RT,T: about 10 minutes for one subcategory,<br/>60 to 90 for the full library
+    and the scanner waits
+        loop every poll interval, until a terminal status
+            S->>RT: GET /v1/scan/{uuid}
+            RT-->>S: QUEUED, RUNNING, COMPLETED
+        end
+    end
+    S->>RT: GET /v1/report/{static or dynamic}/{uuid}/report
+    RT-->>S: ASR, category and severity breakdown
+    S->>S: apply the gate
+    Note right of S: PASS needs a completed scan,<br/>executed attacks, ASR within the ceiling,<br/>and no hit in a protected category
+    S-->>CI: exit 0 PASS, 1 FAIL, 2 ERROR<br/>red_team_report.json, red_team_result.json
+```
+
 ## How the gate decides
 
 | Exit | Verdict | When |
@@ -84,10 +125,10 @@ Measured on 2026-10-06 against a Bedrock Nova Lite application with the AIRS run
 | Scan | Size | Time |
 | --- | --- | --- |
 | STATIC, PROMPT_INJECTION only | 226 attack units | about 10 minutes |
-| STATIC, full preselected library | 1,568 attack units | about 60 minutes |
+| STATIC, full preselected library | 1,568 attack units (4,434 attacks) | 60 to 90 minutes |
 | DYNAMIC, default size | 60 streams | DYNAMIC_TIME |
 
-Time depends on how fast the target answers and on any rate limit set on the target. Scans that run against the same target at the same time slow each other down. The manual workflow waits up to 240 minutes by default (300 at most) inside a 330-minute job. GitHub-hosted jobs stop at 360 minutes.
+Time depends on how fast the target answers and on any rate limit set on the target. Scans that run against the same target at the same time slow each other down: the full library took 89 minutes while two other scans shared the target, and was on pace for about 60 alone. The manual workflow waits up to 240 minutes by default (300 at most) inside a 330-minute job. GitHub-hosted jobs stop at 360 minutes.
 
 ## Options
 

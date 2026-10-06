@@ -34,7 +34,7 @@ Validated against a live AIRS tenant on 2026-10-06. See docs/EVIDENCE.md.
 - `--version` and a `scanner_version` field in the result file.
 - The example workflows check out the scanner at a pinned release, so they work
   when copied into another repository.
-- Time budgets sized for a full library run (about 60 minutes measured).
+- Time budgets sized for a full library run (60 to 90 minutes measured).
 - Pinned dependencies and Actions, Dependabot, and a test workflow with
   actionlint.
 
