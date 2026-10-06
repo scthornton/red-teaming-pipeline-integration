@@ -409,7 +409,12 @@ def api_request(
             stale = response.status_code == 401 or (response.status_code == 403 and not denied)
             if stale and isinstance(headers, AuthenticatedHeaders) and not refreshed:
                 response.close()
-                headers.refresh()
+                try:
+                    headers.refresh()
+                except (requests.ConnectionError, requests.Timeout) as exc:
+                    # Not a transport failure of this request: the rejected
+                    # request created nothing, so do not report it as unknown.
+                    raise RuntimeError("Could not refresh the access token.") from exc
                 refreshed = True
                 continue
             response.raise_for_status()
@@ -652,6 +657,15 @@ def start_scan(
             "Scan submission outcome is unknown. Check SCM for the job before "
             "starting another scan; the create request was not retried."
         ) from exc
+    except requests.HTTPError as exc:
+        # A gateway or server error does not prove the job was not created.
+        if exc.response is None or exc.response.status_code < 500:
+            raise
+        raise RuntimeError(
+            f"Scan submission returned HTTP {exc.response.status_code}, so its outcome is "
+            "unknown. Check SCM for the job before starting another scan; the create "
+            "request was not retried."
+        ) from exc
     response.raise_for_status()
     body = response.json()
 
@@ -784,28 +798,35 @@ def attempted(entry: Dict[str, Any], successes: Optional[int]) -> bool:
         return False
     if successes > 0:
         return True
-    failed = attack_count(entry, "failed")
-    if entry.get("active") is False:
-        # An inactive entry's planned total proves nothing. Executed failures
-        # still do: live compliance reports mark techniques inactive while
-        # reporting real failed attacks.
-        return failed > 0
-    return failed > 0 or attack_count(entry, "total") > 0 or attack_count(entry, "total_attacks") > 0
+    # A planned total is not an executed attack. Live reports always carry
+    # `failed`, so totals are only a fallback for shapes without it, and never
+    # for inactive entries (live compliance techniques are marked inactive
+    # while reporting real failed attacks).
+    if "failed" in entry or entry.get("active") is False:
+        return attack_count(entry, "failed") > 0
+    return attack_count(entry, "total") > 0 or attack_count(entry, "total_attacks") > 0
+
+
+def executed_count(entry: Dict[str, Any]) -> int:
+    if "failed" in entry:
+        return attack_count(entry, "successful") + attack_count(entry, "failed")
+    return attack_count(entry, "total_attacks") or attack_count(entry, "total")
 
 
 def executed_attacks(report: Dict[str, Any]) -> int:
-    """Count executed STATIC attacks from group, subcategory, or severity totals."""
-    groups = 0
+    """Count executed STATIC attacks from the category group reports.
+
+    A severity report alone is not evidence: without a category breakdown the
+    gate cannot tell what ran.
+    """
+    count = 0
     for key in CATEGORY_REPORT_KEYS:
         group = report.get(key)
         if isinstance(group, dict):
             subs = group.get("sub_categories")
             subs = subs if isinstance(subs, list) else []
-            groups += attack_count(group, "total_attacks") or sum(
-                attack_count(sub, "total") for sub in subs if isinstance(sub, dict)
-            )
-    severity = report.get("severity_report")
-    return max(groups, attack_count(severity, "total_attacks") if isinstance(severity, dict) else 0)
+            count += executed_count(group) or sum(executed_count(sub) for sub in subs if isinstance(sub, dict))
+    return count
 
 
 def category_evidence(report: Dict[str, Any]) -> Tuple[Set[str], Set[str]]:

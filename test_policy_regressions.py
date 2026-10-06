@@ -12,7 +12,7 @@ import redteam_scan as rs
 
 CATEGORIES = [{'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION'}, {'id': 'JAILBREAK'}]}]
 # Minimal executed-attack evidence; a STATIC report without it cannot pass.
-EVIDENCE = {'severity_report': {'total_attacks': 100}}
+EVIDENCE = {'brand_report': {'id': 'BRAND', 'total_attacks': 100, 'successful': 0, 'failed': 100, 'sub_categories': []}}
 
 
 @contextlib.contextmanager

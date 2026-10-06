@@ -178,7 +178,7 @@ def test_category_hits_handles_missing():
 # --- evaluate_policy -------------------------------------------------------
 
 # Every evaluated STATIC report must show executed attacks.
-EVIDENCE = {"severity_report": {"total_attacks": 100}}
+EVIDENCE = {"brand_report": {"id": "BRAND", "total_attacks": 100, "successful": 0, "failed": 100, "sub_categories": []}}
 
 
 def test_evaluate_policy_passes_when_below_threshold():

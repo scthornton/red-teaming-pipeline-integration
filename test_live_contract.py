@@ -222,11 +222,24 @@ def test_zero_attempt_scan_is_error_not_pass(tmp_path, report, extra):
 
 def test_invalid_attack_totals_are_errors():
     with pytest.raises(ValueError, match='total_attacks'):
-        rs.evaluate_policy({'asr': 0, 'severity_report': {'total_attacks': 'many'}}, 5, set())
+        rs.evaluate_policy({'asr': 0, 'brand_report': {'id': 'BRAND', 'total_attacks': 'many', 'sub_categories': []}}, 5, set())
+
+
+def test_severity_totals_alone_are_not_evidence():
+    with pytest.raises(ValueError, match='no executed attacks'):
+        rs.evaluate_policy({'asr': 0, 'severity_report': {'total_attacks': 10, 'successful': 0, 'failed': 10}}, 5, set())
+
+
+def test_planned_group_totals_are_not_executed_attacks():
+    report = {'asr': 0, 'security_report': {'id': 'SECURITY', 'total_attacks': 100, 'successful': 0, 'failed': 0, 'sub_categories': [
+        {'id': 'PROMPT_INJECTION', 'successful': 0, 'failed': 0, 'total': 100}]}}
+    with pytest.raises(ValueError, match='no executed attacks'):
+        rs.evaluate_policy(report, 5, set())
 
 
 @pytest.mark.parametrize('entry,measured', [
-    ({'successful': 0, 'failed': 0, 'total': 12}, True),
+    ({'successful': 0, 'failed': 0, 'total': 12}, False),  # planned, not executed
+    ({'successful': 0, 'total': 12}, True),  # older shape without failure counts
     ({'successful': 0, 'failed': 3}, True),
     ({'successful': 2}, True),
     ({'successful': 0}, False),

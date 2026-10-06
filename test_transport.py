@@ -83,8 +83,23 @@ def test_permanent_errors_are_not_retried(status):
 
 def test_server_errors_do_not_replay_create():
     with patch.object(rs.requests, 'post', return_value=response(503)) as post:
+        with pytest.raises(RuntimeError, match='outcome is unknown'):
+            rs.start_scan('https://data.test', {}, 'target', 'DYNAMIC', None)
+    assert post.call_count == 1
+
+
+def test_client_errors_on_create_keep_the_http_error():
+    with patch.object(rs.requests, 'post', return_value=response(400)):
         with pytest.raises(requests.HTTPError):
             rs.start_scan('https://data.test', {}, 'target', 'DYNAMIC', None)
+
+
+def test_refresh_transport_failure_is_not_an_unknown_submission():
+    headers = rs.AuthenticatedHeaders.__new__(rs.AuthenticatedHeaders)
+    with patch.object(rs.requests, 'post', return_value=response(401)) as post, \
+            patch.object(headers, 'refresh', side_effect=requests.ConnectionError('down')):
+        with pytest.raises(RuntimeError, match='refresh the access token'):
+            rs.start_scan('https://data.test', headers, 'target', 'DYNAMIC', None)
     assert post.call_count == 1
 
 
