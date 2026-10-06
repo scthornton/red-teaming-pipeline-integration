@@ -4,7 +4,7 @@ Unit tests for redteam_scan.py.
 Run with: pytest -v test_redteam_scan.py
 
 Fixtures mirror the verified @cdot65/prisma-airs-sdk 0.11.0 report shapes:
-  - ASR ("asr") is a 0..1 ratio.
+  - ASR ("asr") is already a percentage.
   - Static reports nest categories under security_report / safety_report /
     brand_report (sub_categories[].successful) and compliance_report[].
 """
@@ -222,7 +222,8 @@ def test_evaluate_policy_missing_asr_with_protected_hit_still_fails():
             "sub_categories": [{"id": "PROMPT_INJECTION", "successful": 1}],
         }
     }
-    assert rs.evaluate_policy(report, 5.0, {"PROMPT_INJECTION"}) is True
+    with pytest.raises(ValueError, match="valid ASR"):
+        rs.evaluate_policy(report, 5.0, {"PROMPT_INJECTION"})
 
 
 # --- start_scan (request body + response shape) ----------------------------

@@ -20,10 +20,10 @@ Shapes verified against @cdot65/prisma-airs-sdk 0.11.0. Key facts:
     One OAuth token covers both.
   - Scan-create body: {name, target:{uuid}, job_type, job_metadata}.
     job_type is STATIC | DYNAMIC | CUSTOM. STATIC's metadata is
-    {"categories": {}} where {} selects all categories.
+    an explicit non-empty categories map resolved from the live vocabulary.
   - Report path is /v1/report/static/{job}/report or
     /v1/report/dynamic/{job}/report, routed by job type.
-  - ASR ("asr") is a 0..1 ratio (0.25 == 25%), not a percent.
+  - ASR ("asr") is a percent (1.09 == 1.09%).
   - Category breakdown lives under security_report / safety_report /
     brand_report (and compliance_report[]) on STATIC reports; DYNAMIC
     reports carry no category breakdown.
@@ -31,6 +31,7 @@ Shapes verified against @cdot65/prisma-airs-sdk 0.11.0. Key facts:
 import argparse
 import base64
 import json
+import math
 import os
 import sys
 import time
@@ -85,9 +86,8 @@ DEFAULT_MAX_POLL_MINUTES = 60
 # Real JobStatus enum: INIT, QUEUED, RUNNING, COMPLETED, PARTIALLY_COMPLETE,
 # FAILED, ABORTED. Terminal = anything we will not see progress past.
 TERMINAL_STATUSES = {"COMPLETED", "PARTIALLY_COMPLETE", "FAILED", "ABORTED"}
-# A report is fetchable for these. PARTIALLY_COMPLETE still yields a usable
-# (partial) report, so we evaluate it rather than erroring out.
-SUCCESS_STATUSES = {"COMPLETED", "PARTIALLY_COMPLETE"}
+# Partial results are not sufficient evidence for a passing gate.
+SUCCESS_STATUSES = {"COMPLETED"}
 
 # Exit codes (mirrors model security script for pipeline parity).
 EXIT_SUCCESS = 0
@@ -96,6 +96,30 @@ EXIT_ERROR = 2
 
 
 # --- Argument parsing ------------------------------------------------------
+
+
+def percent_value(value: Any) -> float:
+    """Reject missing, non-finite, boolean, and out-of-range percentages."""
+    if isinstance(value, bool):
+        raise ValueError("Percentage must be a number between 0 and 100.")
+    try:
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Percentage must be a number between 0 and 100.") from exc
+    if not math.isfinite(result) or not 0 <= result <= 100:
+        raise ValueError("Percentage must be finite and between 0 and 100.")
+    return result
+
+
+def positive_int(value: str) -> int:
+    result = int(value)
+    if result <= 0:
+        raise ValueError("Value must be a positive integer.")
+    return result
+
+
+def category_names(value: str) -> Set[str]:
+    return {part.strip().upper().replace(" ", "_") for part in value.split(",") if part.strip()}
 
 
 def parse_arguments(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -157,8 +181,8 @@ Examples:
     )
     parser.add_argument(
         "--max-asr-percent",
-        type=float,
-        default=float(os.getenv("MAX_ASR_PERCENT", DEFAULT_MAX_ASR_PERCENT)),
+        type=percent_value,
+        default=os.getenv("MAX_ASR_PERCENT") or str(DEFAULT_MAX_ASR_PERCENT),
         help=(
             "Maximum Attack Success Rate (percent) before the pipeline fails. "
             f"Default: {DEFAULT_MAX_ASR_PERCENT}."
@@ -177,14 +201,14 @@ Examples:
     )
     parser.add_argument(
         "--poll-interval",
-        type=int,
-        default=int(os.getenv("POLL_INTERVAL_SECONDS", DEFAULT_POLL_INTERVAL_SECONDS)),
+        type=positive_int,
+        default=os.getenv("POLL_INTERVAL_SECONDS") or str(DEFAULT_POLL_INTERVAL_SECONDS),
         help=f"Seconds between status polls (default: {DEFAULT_POLL_INTERVAL_SECONDS}).",
     )
     parser.add_argument(
         "--max-wait-minutes",
-        type=int,
-        default=int(os.getenv("MAX_WAIT_MINUTES", DEFAULT_MAX_POLL_MINUTES)),
+        type=positive_int,
+        default=os.getenv("MAX_WAIT_MINUTES") or str(DEFAULT_MAX_POLL_MINUTES),
         help=(
             "Maximum total wait time in minutes before timing out the scan "
             f"(default: {DEFAULT_MAX_POLL_MINUTES})."
@@ -301,11 +325,13 @@ def build_static_categories(
     """
     categories = list_categories(data_base, headers)
     out: Dict[str, List[str]] = {}
+    known: Set[str] = set()
     for cat in categories:
         cat_id = str(cat.get("id", "")).upper()
         sub_ids = [str(s.get("id")) for s in (cat.get("sub_categories") or []) if s.get("id")]
         if not cat_id or not sub_ids:
             continue
+        known.update([cat_id, *(sub.upper() for sub in sub_ids)])
         if selected:
             if cat_id in selected:
                 chosen = sub_ids  # whole group requested
@@ -316,6 +342,9 @@ def build_static_categories(
             out[cat_id] = chosen
         else:
             out[cat_id] = sub_ids
+    unknown = (selected or set()) - known
+    if unknown:
+        raise ValueError(f"Unknown scan categories: {', '.join(sorted(unknown))}")
     return out
 
 
@@ -462,88 +491,84 @@ def compute_asr(report: Dict[str, Any]) -> Optional[float]:
 
     for container in containers:
         for key in asr_keys:
-            if key in container and container[key] is not None:
+            if key in container:
                 try:
-                    return float(container[key])
-                except (TypeError, ValueError):
-                    continue
+                    return percent_value(container[key])
+                except ValueError:
+                    return None
     return None
 
 
-def successful_category_hits(report: Dict[str, Any]) -> Set[str]:
-    """
-    Collect the names of categories/subcategories with >=1 successful attack.
-
-    Walks the STATIC report shape: security_report / safety_report /
-    brand_report (CategoryReport, each with sub_categories[].successful) plus
-    compliance_report[] (techniques[].successful). Returns an upper-cased set
-    of both group-level ids/display_names and subcategory ids/display_names,
-    so a fail-on list can target either granularity.
-
-    A legacy by_category[].successes shape is also accepted as a fallback.
-    """
+def category_evidence(report: Dict[str, Any]) -> Tuple[Set[str], Set[str]]:
+    """Return successful and measured category IDs, rejecting malformed counts."""
     hits: Set[str] = set()
+    measured: Set[str] = set()
 
-    def _names(entry: Dict[str, Any]) -> List[str]:
-        # Key on canonical machine ids only (e.g. PROMPT_INJECTION), not the
-        # human display_name, so the hit set matches the documented vocabulary
-        # and stays free of "Prompt Injection"-style duplicates. Spaces are
-        # normalized to underscores to forgive display-style fail-on input.
-        out = []
-        for key in ("id", "category", "name"):
-            val = entry.get(key)
-            if val:
-                out.append(str(val).upper().replace(" ", "_"))
-        return out
+    def names(entry: Dict[str, Any]) -> Set[str]:
+        return {
+            str(entry[key]).upper().replace(" ", "_")
+            for key in ("id", "category", "name") if entry.get(key)
+        }
 
-    def _succeeded(entry: Dict[str, Any]) -> int:
+    def count(entry: Dict[str, Any]) -> Optional[int]:
         for key in ("successful", "successes", "success_count", "attacks_succeeded"):
-            val = entry.get(key)
-            if val:
-                try:
-                    return int(val)
-                except (TypeError, ValueError):
-                    continue
-        return 0
+            if key not in entry:
+                continue
+            value = entry[key]
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
+                raise ValueError(f"Invalid success count for {sorted(names(entry))}.")
+            try:
+                result = int(value)
+            except ValueError as exc:
+                raise ValueError("Success counts must be nonnegative integers.") from exc
+            if result < 0:
+                raise ValueError("Success counts must be nonnegative integers.")
+            return result
+        return None
 
-    # CategoryReport groups (security/safety/brand).
-    for group_key in CATEGORY_REPORT_KEYS:
-        group = report.get(group_key)
-        if not isinstance(group, dict):
-            continue
-        group_hit = _succeeded(group) > 0
-        sub_hits = False
-        for sub in group.get("sub_categories") or []:
-            if isinstance(sub, dict) and _succeeded(sub) > 0:
-                sub_hits = True
-                hits.update(_names(sub))
-        if group_hit or sub_hits:
-            hits.update(_names(group))
+    def visit(entry: Any, children_key: Optional[str] = None) -> Tuple[bool, bool]:
+        if not isinstance(entry, dict):
+            raise ValueError("Category entries must be objects.")
+        successes = count(entry)
+        hit, observed = successes is not None and successes > 0, successes is not None
+        if children_key:
+            children = entry.get(children_key) or []
+            if not isinstance(children, list):
+                raise ValueError("Category breakdown must be a list.")
+            results = [visit(child) for child in children]
+            hit = hit or any(result[0] for result in results)
+            observed = observed or (bool(results) and all(result[1] for result in results))
+        if hit:
+            hits.update(names(entry))
+        if observed:
+            measured.update(names(entry))
+        return hit, observed
 
-    # Compliance report is an array of frameworks with techniques[].
-    for framework in report.get("compliance_report") or []:
-        if not isinstance(framework, dict):
-            continue
-        fw_hit = False
-        for tech in framework.get("techniques") or []:
-            if isinstance(tech, dict) and _succeeded(tech) > 0:
-                fw_hit = True
-                hits.update(_names(tech))
-        if fw_hit:
-            hits.update(_names(framework))
+    for key in CATEGORY_REPORT_KEYS:
+        if report.get(key) is not None:
+            visit(report[key], "sub_categories")
 
-    # Legacy/alternate by_category shape (list or dict).
-    by_category = report.get("by_category") or report.get("category_breakdown")
-    if isinstance(by_category, dict):
-        by_category = [
-            {"category": name, **(stats if isinstance(stats, dict) else {})}
-            for name, stats in by_category.items()
-        ]
-    for entry in by_category or []:
-        if isinstance(entry, dict) and _succeeded(entry) > 0:
-            hits.update(_names(entry))
+    compliance = report.get("compliance_report") or []
+    if not isinstance(compliance, list):
+        raise ValueError("Compliance report must be a list.")
+    results = [visit(framework, "techniques") for framework in compliance]
+    if any(result[0] for result in results):
+        hits.add("COMPLIANCE")
+    if results and all(result[1] for result in results):
+        measured.add("COMPLIANCE")
 
-    return hits
+    legacy = report.get("by_category") or report.get("category_breakdown") or []
+    if isinstance(legacy, dict):
+        legacy = [{"category": name, **stats} for name, stats in legacy.items()]
+    if not isinstance(legacy, list):
+        raise ValueError("Category breakdown must be a list.")
+    for entry in legacy:
+        visit(entry)
+    return hits, measured
+
+
+def successful_category_hits(report: Dict[str, Any]) -> Set[str]:
+    return category_evidence(report)[0]
 
 
 def evaluate_policy(
@@ -557,12 +582,13 @@ def evaluate_policy(
       2. Category guardrails - if any successful attacks land in
          `fail_on_categories`, fail regardless of overall ASR.
     """
+    max_asr_percent = percent_value(max_asr_percent)
+    if not isinstance(report, dict):
+        raise ValueError("Report must be a JSON object.")
     asr = compute_asr(report)
     if asr is None:
-        print("\n   Could not extract ASR from report. Logging keys for triage:")
-        print("   " + ", ".join(sorted(report.keys()))[:200])
-    else:
-        print(f"\n   Attack Success Rate: {asr:.2f}% (threshold {max_asr_percent:.2f}%)")
+        raise ValueError("Report has no valid ASR percentage; policy cannot be evaluated.")
+    print(f"\n   Attack Success Rate: {asr:.2f}% (threshold {max_asr_percent:.2f}%)")
 
     violated = False
 
@@ -570,7 +596,10 @@ def evaluate_policy(
         print(f"      VIOLATION: ASR {asr:.2f}% exceeds threshold {max_asr_percent:.2f}%")
         violated = True
 
-    cat_hits = successful_category_hits(report)
+    cat_hits, measured = category_evidence(report)
+    missing = fail_on_categories - measured
+    if missing:
+        raise ValueError(f"No measured results for protected categories: {', '.join(sorted(missing))}")
     if fail_on_categories and cat_hits:
         intersect = cat_hits & fail_on_categories
         if intersect:
@@ -610,7 +639,10 @@ def resolve_credentials() -> Tuple[Optional[str], Optional[str], Optional[str], 
 
 
 def run(argv: Optional[List[str]] = None) -> int:
-    args = parse_arguments(argv)
+    try:
+        args = parse_arguments(argv)
+    except SystemExit as exc:
+        return int(exc.code)
 
     client_id, client_secret, tsg_id, data_base, mgmt_base = resolve_credentials()
 
@@ -628,6 +660,18 @@ def run(argv: Optional[List[str]] = None) -> int:
         return EXIT_ERROR
 
     job_type = normalize_job_type(args.scan_type)
+    fail_on_categories = category_names(args.fail_on_categories)
+    selected = category_names(args.categories)
+    if not (args.list_targets or args.list_categories):
+        if not args.target_uuid:
+            print("CONFIGURATION ERROR: --target-uuid is required for a scan.")
+            return EXIT_ERROR
+        if job_type == "CUSTOM":
+            print("CONFIGURATION ERROR: CUSTOM prompt sets are not supported.")
+            return EXIT_ERROR
+        if job_type == "DYNAMIC" and (fail_on_categories or selected):
+            print("CONFIGURATION ERROR: category selection and guardrails require STATIC scans.")
+            return EXIT_ERROR
 
     try:
         token = fetch_oauth_token(client_id, client_secret, tsg_id)
@@ -656,27 +700,6 @@ def run(argv: Optional[List[str]] = None) -> int:
                     print(f"      - {s.get('id')}  ({s.get('display_name')})")
             return EXIT_SUCCESS
 
-        # --- Scan mode ----------------------------------------------------
-        if not args.target_uuid:
-            print("CONFIGURATION ERROR: --target-uuid is required for a scan.")
-            return EXIT_ERROR
-
-        if job_type not in VALID_JOB_TYPES:
-            print(f"CONFIGURATION ERROR: unsupported job_type {job_type}.")
-            return EXIT_ERROR
-        if job_type == "CUSTOM":
-            print(
-                "CONFIGURATION ERROR: CUSTOM scans require a managed prompt set "
-                "(custom_prompt_sets) that this CI integration does not configure."
-            )
-            return EXIT_ERROR
-
-        fail_on_categories = {
-            c.strip().upper().replace(" ", "_")
-            for c in str(args.fail_on_categories).split(",")
-            if c.strip()
-        }
-
         print("\nInitializing Prisma AIRS Red Teaming Scanner")
         print(f"   Data endpoint:   {data_base}")
         print(f"   Mgmt endpoint:   {mgmt_base}")
@@ -687,17 +710,8 @@ def run(argv: Optional[List[str]] = None) -> int:
         print(f"   Poll interval:   {args.poll_interval}s")
         print(f"   Max wait:        {args.max_wait_minutes} min")
 
-        if job_type == "DYNAMIC" and fail_on_categories:
-            print(
-                "   NOTE: DYNAMIC reports carry no category breakdown; "
-                "--fail-on-categories will not match anything for this scan."
-            )
-
         job_metadata: Optional[Dict[str, Any]] = None
         if job_type == "STATIC":
-            selected = {
-                c.strip().upper() for c in str(args.categories).split(",") if c.strip()
-            }
             categories_map = build_static_categories(data_base, headers, selected or None)
             if not categories_map:
                 print(
@@ -705,6 +719,14 @@ def run(argv: Optional[List[str]] = None) -> int:
                     "categories/subcategories. Run --list-categories for valid names."
                 )
                 return EXIT_ERROR
+            scanned = set(categories_map)
+            scanned.update(sub.upper() for subs in categories_map.values() for sub in subs)
+            missing_categories = fail_on_categories - scanned
+            if missing_categories:
+                raise ValueError(
+                    "Protected categories are unknown or outside the scan scope: "
+                    + ", ".join(sorted(missing_categories))
+                )
             job_metadata = {"categories": categories_map}
             scope = sorted(categories_map.keys())
             print(f"   Categories:      {scope if selected else '(all)'}")
@@ -740,6 +762,9 @@ def run(argv: Optional[List[str]] = None) -> int:
         print("\nSCAN PASSED: Red Teaming policy met.")
         return EXIT_SUCCESS
 
+    except ValueError as exc:
+        print(f"\nVALIDATION ERROR: {exc}")
+        return EXIT_ERROR
     except requests.HTTPError as exc:
         body = exc.response.text[:300] if exc.response is not None else "(no body)"
         print(f"\nHTTP ERROR: {exc} (body: {body})")
