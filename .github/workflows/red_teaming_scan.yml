@@ -56,7 +56,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install dependencies
-        run: python -m pip install requests tenacity
+        run: python -m pip install -r requirements.txt
       - name: Run Prisma AIRS Red Teaming Scan
         id: scan
         env:

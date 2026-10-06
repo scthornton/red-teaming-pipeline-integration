@@ -152,3 +152,21 @@ def test_missing_success_count_is_not_clean_result():
     report = {"asr": 0, "security_report": {"id": "SECURITY", "sub_categories": [{"id": "JAILBREAK"}]}}
     with pytest.raises(ValueError, match="No measured results"):
         rs.evaluate_policy(report, 5, {"JAILBREAK"})
+
+
+@pytest.mark.parametrize('extra', [
+    ['--expected-sha', 'a' * 40],
+    ['--expected-sha', 'a' * 40, '--deployed-sha', 'b' * 40],
+    ['--expected-sha', 'short', '--deployed-sha', 'short'],
+])
+def test_deployment_mismatch_stops_before_auth(tmp_path, extra):
+    with api({'asr': 0}) as calls:
+        assert run_scan(tmp_path, extra) == 2
+    assert not calls
+
+
+def test_matching_deployment_identity_is_recorded(tmp_path):
+    with api({'asr': 0}):
+        assert run_scan(tmp_path, ['--expected-sha', 'a' * 40, '--deployed-sha', 'a' * 40]) == 0
+    result = json.loads((tmp_path / 'result.json').read_text())
+    assert result['expected_sha'] == result['deployed_sha'] == 'a' * 40

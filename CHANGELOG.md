@@ -4,6 +4,25 @@ All notable changes to this project are documented here. Format loosely follows
 [Keep a Changelog](https://keepachangelog.com/), and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Fixed
+- Invalid ASR, missing category evidence, unknown category names, and partial
+  scans now fail the gate instead of allowing a passing result.
+- COMPLIANCE group guardrails include successful framework techniques.
+- Expired OAuth tokens refresh on 401; safe reads retry transient failures.
+  Ambiguous scan-create requests are not replayed.
+- Nightly failures remain failures after artifact upload and notification.
+- Workflow inputs pass through environment variables instead of shell source.
+- Empty numeric environment defaults no longer crash argument parsing.
+
+### Added
+- Result artifacts with scan identity, policy, status, verdict, and timestamps.
+- Local HTTP regression tests and a push/PR test workflow.
+- A reusable deployment scan example requiring matching commit evidence.
+- Pinned dependencies, pinned Actions, limited workflow permissions, and
+  Dependabot update checks.
+
 ## [0.1.0] - 2026-06-02
 
 Initial release. GitHub Actions CI/CD pipeline for automated AI Red Teaming with
@@ -17,7 +36,7 @@ Palo Alto Networks Prisma AIRS, validated end to end against a live tenant.
 - `--list-targets` and `--list-categories` discovery modes.
 - `--categories` to scope a STATIC scan (default: full attack library).
 - Main `workflow_dispatch` workflow plus PR-triggered and nightly examples.
-- Pytest suite (44 tests) covering ASR conversion, category extraction, scan
+- Pytest suite (43 tests) covering ASR conversion, category extraction, scan
   body, report routing, and polling.
 - Known-good STATIC report fixture under `fixtures/`.
 
