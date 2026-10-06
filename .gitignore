@@ -61,3 +61,5 @@ credentials.json
 *.pkl
 *.pickle
 models/
+
+red_team_result.json

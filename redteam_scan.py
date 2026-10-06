@@ -34,6 +34,8 @@ import json
 import math
 import os
 import sys
+import tempfile
+from pathlib import Path
 import time
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
@@ -220,6 +222,11 @@ Examples:
         "--report-out",
         default="red_team_report.json",
         help="Path to save the full scan report JSON (default: red_team_report.json).",
+    )
+    parser.add_argument(
+        "--result-out",
+        default="red_team_result.json",
+        help="Path for scan identity, policy, completion status, and verdict JSON.",
     )
     parser.add_argument(
         "--list-targets",
@@ -697,9 +704,20 @@ def evaluate_policy(
 
 
 def save_report(report: Dict[str, Any], path: str) -> None:
-    with open(path, "w") as fh:
-        json.dump(report, fh, indent=2, default=str)
-    print(f"   Report saved to {path}")
+    """Replace JSON artifacts atomically, including checkpoints during a scan."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", dir=target.parent, delete=False, encoding="utf-8") as fh:
+            temporary = fh.name
+            json.dump(report, fh, indent=2, allow_nan=False)
+            fh.write("\n")
+        os.replace(temporary, target)
+    finally:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
+    print(f"   JSON saved to {path}")
 
 
 def resolve_credentials() -> Tuple[Optional[str], Optional[str], Optional[str], str, str]:
@@ -722,6 +740,55 @@ def run(argv: Optional[List[str]] = None) -> int:
     except SystemExit as exc:
         return int(exc.code)
 
+    result: Dict[str, Any] = {
+        "schema_version": 1,
+        "scan_uuid": None,
+        "target_uuid": args.target_uuid,
+        "job_type": normalize_job_type(args.scan_type),
+        "status": "NOT_STARTED",
+        "verdict": "ERROR",
+        "exit_code": EXIT_ERROR,
+        "asr_percent": None,
+        "policy": {
+            "max_asr_percent": args.max_asr_percent,
+            "fail_on_categories": sorted(category_names(args.fail_on_categories)),
+        },
+        "requested_categories": sorted(category_names(args.categories)),
+        "commit_sha": os.getenv("GITHUB_SHA"),
+        "run_id": os.getenv("GITHUB_RUN_ID"),
+        "started_at": datetime.now(timezone.utc).isoformat(),
+    }
+    code = EXIT_ERROR
+    write_result = False
+    discovery = args.list_targets or args.list_categories
+    try:
+        if not discovery:
+            if Path(args.report_out).resolve() == Path(args.result_out).resolve():
+                raise ValueError("Report and result paths must be different.")
+            write_result = True
+            # A failed new scan must never upload an older run's report.
+            Path(args.report_out).unlink(missing_ok=True)
+            save_report(result, args.result_out)
+        code = execute(args, result)
+    except (ValueError, OSError) as exc:
+        print(f"OUTPUT ERROR: {exc}")
+        return EXIT_ERROR
+    finally:
+        if write_result:
+            result.update(
+                exit_code=code,
+                verdict={EXIT_SUCCESS: "PASS", EXIT_SECURITY_VIOLATION: "FAIL", EXIT_ERROR: "ERROR"}[code],
+                finished_at=datetime.now(timezone.utc).isoformat(),
+            )
+            try:
+                save_report(result, args.result_out)
+            except (ValueError, OSError) as exc:
+                print(f"OUTPUT ERROR: could not save result: {exc}")
+                code = EXIT_ERROR
+    return code
+
+
+def execute(args: argparse.Namespace, result: Dict[str, Any]) -> int:
     client_id, client_secret, tsg_id, data_base, mgmt_base = resolve_credentials()
 
     missing = [
@@ -804,6 +871,7 @@ def run(argv: Optional[List[str]] = None) -> int:
                     "Protected categories are unknown or outside the scan scope: "
                     + ", ".join(sorted(missing_categories))
                 )
+            result["scan_categories"] = categories_map
             job_metadata = {"categories": categories_map}
             scope = sorted(categories_map.keys())
             print(f"   Categories:      {scope if selected else '(all)'}")
@@ -813,6 +881,8 @@ def run(argv: Optional[List[str]] = None) -> int:
             data_base, headers, args.target_uuid, job_type, args.scan_name, job_metadata
         )
         print(f"   Scan UUID: {scan_uuid}")
+        result.update(scan_uuid=scan_uuid, status="SUBMITTED", verdict="PENDING")
+        save_report(result, args.result_out)
 
         print("\nPolling for completion...")
         final_state = poll_until_terminal(
@@ -820,6 +890,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         )
         status = str(final_state.get("status", "UNKNOWN")).upper()
         print(f"\nScan terminal status: {status}")
+        result["status"] = status
 
         if status not in SUCCESS_STATUSES:
             print("Scan did not complete successfully; failing pipeline.")
@@ -829,6 +900,8 @@ def run(argv: Optional[List[str]] = None) -> int:
         print("\nFetching report...")
         report = fetch_report(data_base, headers, scan_uuid, job_type)
         save_report(report, args.report_out)
+        if isinstance(report, dict):
+            result["asr_percent"] = compute_asr(report)
 
         violated = evaluate_policy(report, args.max_asr_percent, fail_on_categories)
 
@@ -843,10 +916,12 @@ def run(argv: Optional[List[str]] = None) -> int:
         print(f"\nVALIDATION ERROR: {exc}")
         return EXIT_ERROR
     except requests.HTTPError as exc:
-        body = exc.response.text[:300] if exc.response is not None else "(no body)"
-        print(f"\nHTTP ERROR: {exc} (body: {body})")
+        status_code = exc.response.status_code if exc.response is not None else "unknown"
+        result["error"] = f"HTTP {status_code}"
+        print(f"\nHTTP ERROR: status {status_code}. See the scan UUID in the result artifact.")
         return EXIT_ERROR
     except TimeoutError as exc:
+        result["error"] = "Polling timed out; the remote scan may still be running."
         print(f"\nTIMEOUT: {exc}")
         return EXIT_ERROR
     except Exception as exc:  # noqa: BLE001
