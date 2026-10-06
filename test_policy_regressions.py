@@ -33,7 +33,8 @@ def api(report, state='COMPLETED', poll_status=200):
             if self.path == '/v1/categories':
                 self.reply(200, {'data': [{'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION'}, {'id': 'JAILBREAK'}]}]})
             elif self.path == '/v1/scan/review-job':
-                self.reply(poll_status, {'status': state, 'completed': 1, 'total': 100})
+                code = poll_status.pop(0) if isinstance(poll_status, list) else poll_status
+                self.reply(code, {'status': state, 'completed': 1, 'total': 100})
             else:
                 self.reply(200, report)
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
