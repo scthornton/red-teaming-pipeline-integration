@@ -15,6 +15,7 @@ All notable changes to this project are documented here. Format loosely follows
 - Nightly failures remain failures after artifact upload and notification.
 - Workflow inputs pass through environment variables instead of shell source.
 - Empty numeric environment defaults no longer crash argument parsing.
+- Target discovery follows all pages and detects repeated or incomplete pages.
 
 ### Added
 - Result artifacts with scan identity, policy, status, verdict, and timestamps.
