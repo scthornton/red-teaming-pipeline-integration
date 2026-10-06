@@ -11,14 +11,12 @@ The scanner tests an application that is already deployed. It does not deploy an
 sequenceDiagram
     autonumber
     participant CI as CI job<br/>(GitHub Actions)
-    participant A as SCM auth
     participant S as redteam_scan.py
     participant RT as AIRS Red Teaming
     participant T as Your app<br/>(registered target)
 
     CI->>S: target UUID and policy
-    S->>A: POST /oauth2/access_token
-    A-->>S: bearer token, refreshed on 401 or 403
+    Note right of S: OAuth token from SCM auth,<br/>refreshed on 401 or 403
     alt new scan
         S->>RT: GET /v1/categories (STATIC)
         RT-->>S: catalog, preselected subcategories
@@ -40,8 +38,7 @@ sequenceDiagram
     end
     S->>RT: GET /v1/report/{static or dynamic}/{uuid}/report
     RT-->>S: ASR, plus category and severity results<br/>or goals achieved
-    S->>S: apply the gate
-    Note right of S: PASS needs a completed scan,<br/>executed attacks, ASR within the ceiling,<br/>no hit in a protected category,<br/>and achieved goals within the limit
+    Note right of S: The gate passes only with<br/>a completed scan,<br/>executed attacks,<br/>ASR within the ceiling,<br/>no protected category hit,<br/>and goals within the limit
     S-->>CI: exit 0 PASS, 1 FAIL, 2 ERROR<br/>red_team_report.json, red_team_result.json
 ```
 
