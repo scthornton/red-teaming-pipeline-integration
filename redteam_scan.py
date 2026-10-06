@@ -2,7 +2,7 @@
 """
 Prisma AIRS Red Teaming CI/CD Scanner.
 
-Production-grade GitHub Actions / generic CI integration for automated AI
+GitHub Actions / generic CI integration for automated AI
 Red Teaming scans against an existing target (LLM endpoint, app, or agent)
 registered in Strata Cloud Manager.
 
@@ -33,6 +33,7 @@ import base64
 import json
 import math
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -228,6 +229,8 @@ Examples:
         default="red_team_result.json",
         help="Path for scan identity, policy, completion status, and verdict JSON.",
     )
+    parser.add_argument("--expected-sha", help="Full commit SHA that the deployment must serve.")
+    parser.add_argument("--deployed-sha", help="Full commit SHA verified by the trusted deployment job.")
     parser.add_argument(
         "--list-targets",
         action="store_true",
@@ -755,6 +758,8 @@ def run(argv: Optional[List[str]] = None) -> int:
         },
         "requested_categories": sorted(category_names(args.categories)),
         "commit_sha": os.getenv("GITHUB_SHA"),
+        "expected_sha": args.expected_sha,
+        "deployed_sha": args.deployed_sha,
         "run_id": os.getenv("GITHUB_RUN_ID"),
         "started_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -808,6 +813,14 @@ def execute(args: argparse.Namespace, result: Dict[str, Any]) -> int:
     fail_on_categories = category_names(args.fail_on_categories)
     selected = category_names(args.categories)
     if not (args.list_targets or args.list_categories):
+        if args.expected_sha is not None or args.deployed_sha is not None:
+            shas = (args.expected_sha, args.deployed_sha)
+            if not all(value and re.fullmatch(r"[0-9a-fA-F]{40}", value) for value in shas):
+                print("CONFIGURATION ERROR: expected and deployed SHA must both be full commit SHAs.")
+                return EXIT_ERROR
+            if args.expected_sha.lower() != args.deployed_sha.lower():
+                print("CONFIGURATION ERROR: deployed revision does not match the expected commit.")
+                return EXIT_ERROR
         if not args.target_uuid:
             print("CONFIGURATION ERROR: --target-uuid is required for a scan.")
             return EXIT_ERROR

@@ -1,8 +1,9 @@
-# Evidence: this pipeline works
+# Validation evidence
 
 Validation record for the Prisma AIRS Red Teaming CI/CD pipeline, captured
-2026-06-02 against a live AIRS tenant (SCM). Every claim below is reproducible
-with the commands in the last section.
+2026-06-02 against a live AIRS tenant (SCM). The sections below preserve the
+original results; their test counts and output predate the October hardening changes.
+Use the current README for installation and current behavior.
 
 ## TL;DR
 
@@ -176,7 +177,7 @@ CI report ASR              : 1.54%
 ```bash
 git clone git@github.com:scthornton/red-teaming-pipeline-integration.git
 cd red-teaming-pipeline-integration
-pip install requests tenacity pytest
+python -m pip install -r requirements-dev.txt
 
 export PRISMA_AIRS_CLIENT_ID=<service-account-client-id>
 export PRISMA_AIRS_CLIENT_SECRET=<service-account-secret>
@@ -200,3 +201,18 @@ python redteam_scan.py \
 # In CI: Actions -> "Prisma AIRS Red Teaming Scan" -> Run workflow.
 # The full report is uploaded as the red-team-scan-report artifact.
 ```
+
+
+## October 2026 regression coverage
+
+The scanner and workflows were reviewed using Python 3.12, a local HTTP API,
+committed report fixtures, and mocked notification calls. The current test
+suite covers missing/invalid ASR, category coverage, partial scans, token expiry,
+read retries, ambiguous scan creation, workflow input handling, and result
+artifacts. These tests run in GitHub Actions on pushes and pull requests.
+
+The original live run above took about 10.5 minutes and used a 100% ASR ceiling.
+It established connectivity and the scan lifecycle, not token-expiry recovery
+or strict policy enforcement. The October changes have not been validated by
+a new live AIRS scan. Deployment identity also requires a trusted deployment
+job to verify the revision actually served by the target.
