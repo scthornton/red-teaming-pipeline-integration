@@ -140,6 +140,13 @@ def positive_int(value: str) -> int:
     return result
 
 
+def nonnegative_int(value: str) -> int:
+    result = int(value)
+    if result < 0:
+        raise ValueError("Value must be a nonnegative integer.")
+    return result
+
+
 def scan_name(value: str) -> str:
     if not 3 <= len(value) <= 255:
         raise argparse.ArgumentTypeError("Scan name must be 3 to 255 characters.")
@@ -246,6 +253,15 @@ Examples:
         type=positive_int,
         default=None,
         help=f"DYNAMIC only. Maximum iterations per attack stream (default: {DEFAULT_STREAM_DEPTH}).",
+    )
+    parser.add_argument(
+        "--max-goals-achieved",
+        type=nonnegative_int,
+        default=os.getenv("MAX_GOALS_ACHIEVED") or None,
+        help=(
+            "DYNAMIC only. Fail when the attacker achieved more goals than this, "
+            "for example 0. Default: not checked."
+        ),
     )
     parser.add_argument(
         "--max-asr-percent",
@@ -906,7 +922,7 @@ def successful_category_hits(report: Dict[str, Any]) -> Set[str]:
 
 def evaluate_policy(
     report: Dict[str, Any], max_asr_percent: float, fail_on_categories: Set[str],
-    *, job_type: Optional[str] = None,
+    *, job_type: Optional[str] = None, max_goals_achieved: Optional[int] = None,
 ) -> bool:
     """
     Return True if a policy violation was detected (i.e. fail the pipeline).
@@ -914,10 +930,12 @@ def evaluate_policy(
     The report must show executed attacks: an ASR of 0 over zero attempts is
     not a pass. STATIC needs a positive attack total; DYNAMIC needs positive
     goal and stream counts. When job_type is None it is inferred from the
-    report shape. Two policies are then layered together:
+    report shape. Policies are then layered together:
       1. ASR ceiling - if measured ASR (percent) exceeds max_asr_percent, fail.
       2. Category guardrails - if any successful attacks land in
          `fail_on_categories`, fail regardless of overall ASR.
+      3. DYNAMIC only - if more attacker goals were achieved than
+         max_goals_achieved, fail. A low ASR can hide several achieved goals.
     """
     max_asr_percent = percent_value(max_asr_percent)
     if not isinstance(report, dict):
@@ -943,6 +961,19 @@ def evaluate_policy(
     if asr is not None and asr > max_asr_percent:
         print(f"      VIOLATION: ASR {asr:.2f}% exceeds threshold {max_asr_percent:.2f}%")
         violated = True
+
+    if kind == "DYNAMIC":
+        achieved = report.get("goals_achieved")
+        valid = type(achieved) is int and 0 <= achieved <= goals
+        if valid:
+            limit = "" if max_goals_achieved is None else f" (limit {max_goals_achieved})"
+            print(f"   Goals achieved: {achieved} of {goals}{limit}")
+        if max_goals_achieved is not None:
+            if not valid:
+                raise ValueError("DYNAMIC report has no valid goals_achieved count; policy cannot be evaluated.")
+            if achieved > max_goals_achieved:
+                print(f"      VIOLATION: {achieved} attacker goals achieved, limit {max_goals_achieved}")
+                violated = True
 
     cat_hits, measured = category_evidence(report)
     missing = fail_on_categories - measured
@@ -1018,6 +1049,7 @@ def run(argv: Optional[List[str]] = None) -> int:
         "policy": {
             "max_asr_percent": args.max_asr_percent,
             "fail_on_categories": sorted(category_names(args.fail_on_categories)),
+            "max_goals_achieved": args.max_goals_achieved,
         },
         "requested_categories": sorted(category_names(args.categories)),
         "commit_sha": os.getenv("GITHUB_SHA"),
@@ -1092,6 +1124,8 @@ def attach_scan(
         raise ConfigurationError(f"--target-uuid does not match the scan's target ({job_target or 'unknown'}).")
     if job_type == "DYNAMIC" and fail_on_categories:
         raise ConfigurationError("category guardrails require STATIC scans.")
+    if job_type != "DYNAMIC" and args.max_goals_achieved is not None:
+        raise ConfigurationError("--max-goals-achieved requires DYNAMIC scans.")
     if job_type == "STATIC":
         metadata = job.get("job_metadata") if isinstance(job.get("job_metadata"), dict) else {}
         result["scan_categories"] = check_scan_scope(metadata.get("categories"), fail_on_categories)
@@ -1143,6 +1177,8 @@ def execute(args: argparse.Namespace, result: Dict[str, Any]) -> int:
             return configuration_error(result, "category selection and guardrails require STATIC scans.")
         elif job_type != "DYNAMIC" and (args.stream_breadth or args.stream_depth):
             return configuration_error(result, "--stream-breadth and --stream-depth require DYNAMIC scans.")
+        elif job_type != "DYNAMIC" and args.max_goals_achieved is not None:
+            return configuration_error(result, "--max-goals-achieved requires DYNAMIC scans.")
 
     try:
         headers = AuthenticatedHeaders(client_id, client_secret, tsg_id)
@@ -1183,6 +1219,8 @@ def execute(args: argparse.Namespace, result: Dict[str, Any]) -> int:
         print(f"   Job type:        {job_type}")
         print(f"   Max ASR:         {args.max_asr_percent:.2f}%")
         print(f"   Fail-on cats:    {sorted(fail_on_categories) or '(none)'}")
+        if args.max_goals_achieved is not None:
+            print(f"   Max goals:       {args.max_goals_achieved}")
         print(f"   Poll interval:   {args.poll_interval}s")
         print(f"   Max wait:        {args.max_wait_minutes} min")
 
@@ -1234,8 +1272,13 @@ def execute(args: argparse.Namespace, result: Dict[str, Any]) -> int:
         save_report(report, args.report_out)
         if isinstance(report, dict):
             result["asr_percent"] = compute_asr(report)
+            if job_type == "DYNAMIC":
+                result.update(goals_achieved=report.get("goals_achieved"), total_goals=report.get("total_goals"))
 
-        violated = evaluate_policy(report, args.max_asr_percent, fail_on_categories, job_type=job_type)
+        violated = evaluate_policy(
+            report, args.max_asr_percent, fail_on_categories,
+            job_type=job_type, max_goals_achieved=args.max_goals_achieved,
+        )
 
         if violated:
             print("\nSCAN FAILED: Red Teaming policy violated.")

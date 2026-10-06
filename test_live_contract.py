@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 import requests
 
+import ci_report
 import redteam_scan as rs
 from test_policy_regressions import EVIDENCE, api, run_scan
 from test_transport import response
@@ -475,3 +476,50 @@ def test_new_scan_configuration_errors_are_recorded(tmp_path, extra, message):
         assert rs.run(['--result-out', str(tmp_path / 'result.json'), '--report-out', str(tmp_path / 'report.json'), *extra]) == 2
     assert not calls
     assert message in result_of(tmp_path)['error']
+
+
+# Goals achieved (DYNAMIC). Live scan 5eaebb09 passed a 5% ASR ceiling at 3.33%
+# while the attacker achieved 4 of 10 goals.
+GOALS_REPORT = {'total_goals': 10, 'total_streams': 60, 'total_threats': 20, 'goals_achieved': 4, 'score': 31.09, 'asr': 3.33}
+
+
+@pytest.mark.parametrize('limit,violated', [(None, False), (0, True), (3, True), (4, False), (10, False)])
+def test_goals_achieved_limit(limit, violated):
+    assert rs.evaluate_policy(GOALS_REPORT, 5, set(), job_type='DYNAMIC', max_goals_achieved=limit) is violated
+
+
+@pytest.mark.parametrize('achieved', [None, -1, 11, '4', True, 2.0])
+def test_goals_achieved_must_be_valid_when_limited(achieved):
+    report = {**GOALS_REPORT, 'goals_achieved': achieved}
+    with pytest.raises(ValueError, match='goals_achieved'):
+        rs.evaluate_policy(report, 5, set(), job_type='DYNAMIC', max_goals_achieved=0)
+    assert rs.evaluate_policy(report, 5, set(), job_type='DYNAMIC') is False  # unchecked without a limit
+
+
+def test_goals_limit_fails_the_live_dynamic_fixture():
+    report = json.loads((FIXTURES / 'dynamic_report_live_2026-07.json').read_text())
+    assert rs.evaluate_policy(report, 100, set(), job_type='DYNAMIC', max_goals_achieved=0) is True
+
+
+def test_goals_limit_end_to_end(tmp_path):
+    with api(GOALS_REPORT):
+        assert run_scan(tmp_path, ['--scan-type', 'DYNAMIC', '--max-goals-achieved', '0']) == 1
+    result = json.loads((tmp_path / 'result.json').read_text())
+    assert (result['goals_achieved'], result['total_goals'], result['policy']['max_goals_achieved']) == (4, 10, 0)
+    assert '- Goals achieved: `4` of `10` (limit 0)' in ci_report.summary(result)
+    with api(GOALS_REPORT):
+        assert run_scan(tmp_path, ['--scan-type', 'DYNAMIC']) == 0
+
+
+def test_goals_limit_requires_dynamic(tmp_path):
+    with api({'asr': 0, **EVIDENCE}) as calls:
+        assert run_scan(tmp_path, ['--max-goals-achieved', '0']) == 2
+    assert not any(method == 'POST' and path == '/v1/scan' for method, path, _ in calls)
+    assert 'requires DYNAMIC' in json.loads((tmp_path / 'result.json').read_text())['error']
+
+
+def test_goals_limit_from_environment(monkeypatch):
+    monkeypatch.setenv('MAX_GOALS_ACHIEVED', '2')
+    assert rs.parse_arguments(['--target-uuid', 't']).max_goals_achieved == 2
+    monkeypatch.setenv('MAX_GOALS_ACHIEVED', '')
+    assert rs.parse_arguments(['--target-uuid', 't']).max_goals_achieved is None

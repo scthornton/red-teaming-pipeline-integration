@@ -40,6 +40,13 @@ def summary(result):
         f"- Scan status: `{text(result.get('status', 'UNKNOWN'))}`",
         f"- ASR: `{text(result.get('asr_percent'))}%`",
         f"- Policy: max ASR `{text(max_asr)}%`, protected categories `{text(protected)}`",
+    ]
+    if result.get("total_goals") is not None:
+        policy = result.get("policy") if isinstance(result.get("policy"), dict) else {}
+        limit = policy.get("max_goals_achieved")
+        limit = "not checked" if limit is None else f"limit {text(limit)}"
+        lines.append(f"- Goals achieved: `{text(result.get('goals_achieved'))}` of `{text(result['total_goals'])}` ({limit})")
+    lines += [
         f"- Target: `{text(result.get('target_uuid'))}`",
         f"- Scan: `{text(result.get('scan_uuid'))}`",
     ]

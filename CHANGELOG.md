@@ -31,6 +31,9 @@ Validated against a live AIRS tenant on 2026-10-06. See docs/EVIDENCE.md.
 - `--scan-uuid` evaluates an existing scan without starting a new one. The
   manual workflow exposes it as `scan_uuid`.
 - `--stream-breadth` and `--stream-depth` for DYNAMIC scans (defaults 6 and 10).
+- `--max-goals-achieved` gates DYNAMIC scans on attacker goals achieved, not
+  just ASR. A live agent scan passed a 5% ASR ceiling with 4 of 10 goals
+  achieved.
 - `--version` and a `scanner_version` field in the result file.
 - The example workflows check out the scanner at a pinned release, so they work
   when copied into another repository.
