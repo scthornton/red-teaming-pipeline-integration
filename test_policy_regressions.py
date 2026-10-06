@@ -59,7 +59,7 @@ def api(report, state='COMPLETED', poll_status=200):
 
 
 def run_scan(tmp_path, extra=()):
-    return rs.run(['--target-uuid', 'review-target', '--poll-interval', '1', '--report-out', str(tmp_path / 'report.json'), *extra])
+    return rs.run(['--target-uuid', 'review-target', '--poll-interval', '1', '--report-out', str(tmp_path / 'report.json'), '--result-out', str(tmp_path / 'result.json'), *extra])
 
 @pytest.mark.parametrize('report,extra,expected', [
     ({'asr': 1.09}, [], 0),

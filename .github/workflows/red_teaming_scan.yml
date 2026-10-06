@@ -31,95 +31,68 @@ on:
         required: false
         default: '60'
 
-  # Optionally also run on a schedule for nightly red-team regression. Uncomment
-  # and adjust the cron to fit your environment. GitHub Actions runs scheduled
-  # workflows on the default branch only.
+  # To enable scheduled scans, set vars.RED_TEAM_TARGET_UUID first.
   # schedule:
-  #   - cron: '0 6 * * *'  # 06:00 UTC daily
+  #   - cron: '0 6 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: red-team-target-${{ inputs.target_uuid || vars.RED_TEAM_TARGET_UUID || 'unconfigured' }}
+  cancel-in-progress: false
 
 jobs:
   red_teaming_scan:
     runs-on: ubuntu-latest
     timeout-minutes: 90
-
-    env:
-      PRISMA_AIRS_CLIENT_ID: ${{ vars.PRISMA_AIRS_CLIENT_ID }}
-      PRISMA_AIRS_CLIENT_SECRET: ${{ secrets.PRISMA_AIRS_CLIENT_SECRET }}
-      PRISMA_AIRS_TSG_ID: ${{ vars.PRISMA_AIRS_TSG_ID }}
-      PRISMA_AIRS_TOKEN_ENDPOINT: ${{ vars.PRISMA_AIRS_TOKEN_ENDPOINT || 'https://auth.apps.paloaltonetworks.com/oauth2/access_token' }}
-      PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/data-plane' }}
-      PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/mgmt-plane' }}
-      MAX_ASR_PERCENT: ${{ inputs.max_asr_percent }}
-      FAIL_ON_CATEGORIES: ${{ inputs.fail_on_categories }}
-      MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes }}
-
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
-
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests tenacity
-
+        run: python -m pip install requests tenacity
       - name: Run Prisma AIRS Red Teaming Scan
+        id: scan
+        env:
+          PRISMA_AIRS_CLIENT_ID: ${{ vars.PRISMA_AIRS_CLIENT_ID }}
+          PRISMA_AIRS_CLIENT_SECRET: ${{ secrets.PRISMA_AIRS_CLIENT_SECRET }}
+          PRISMA_AIRS_TSG_ID: ${{ vars.PRISMA_AIRS_TSG_ID }}
+          PRISMA_AIRS_TOKEN_ENDPOINT: ${{ vars.PRISMA_AIRS_TOKEN_ENDPOINT || 'https://auth.apps.paloaltonetworks.com/oauth2/access_token' }}
+          PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_DATA_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/data-plane' }}
+          PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT: ${{ vars.PRISMA_AIRS_RED_TEAM_MGMT_ENDPOINT || 'https://api.sase.paloaltonetworks.com/ai-red-teaming/mgmt-plane' }}
+          TARGET_UUID: ${{ inputs.target_uuid || vars.RED_TEAM_TARGET_UUID }}
+          SCAN_TYPE: ${{ inputs.scan_type || 'STATIC' }}
+          SCAN_CATEGORIES: ${{ inputs.categories }}
+          MAX_ASR_PERCENT: ${{ inputs.max_asr_percent || '5.0' }}
+          FAIL_ON_CATEGORIES: ${{ inputs.fail_on_categories }}
+          MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes || '60' }}
         run: |
+          if [[ ! "$MAX_WAIT_MINUTES" =~ ^([1-9]|[1-6][0-9]|7[0-5])$ ]]; then
+            echo "Max wait must be between 1 and 75 minutes for this 90-minute job."
+            exit 2
+          fi
           python redteam_scan.py \
-            --target-uuid "${{ inputs.target_uuid }}" \
-            --scan-type "${{ inputs.scan_type }}" \
-            --categories "${{ inputs.categories }}" \
-            --max-asr-percent "${{ inputs.max_asr_percent }}" \
-            --fail-on-categories "${{ inputs.fail_on_categories }}" \
-            --max-wait-minutes "${{ inputs.max_wait_minutes }}"
-
+            --target-uuid "$TARGET_UUID" \
+            --scan-type "$SCAN_TYPE" \
+            --categories "$SCAN_CATEGORIES" \
+            --max-asr-percent "$MAX_ASR_PERCENT" \
+            --fail-on-categories "$FAIL_ON_CATEGORIES" \
+            --max-wait-minutes "$MAX_WAIT_MINUTES"
       - name: Upload Scan Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: red-team-scan-report
-          path: red_team_report.json
-
-      - name: Extract report summary
-        id: summary
+          path: |
+            red_team_report.json
+            red_team_result.json
+          retention-days: 14
+      - name: Summarize scan
         if: always()
-        run: |
-          if [ ! -f red_team_report.json ]; then
-            echo "asr=unknown" >> "$GITHUB_OUTPUT"
-            echo "status=NO_REPORT" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          # asr is already a percent in the report.
-          ASR=$(jq -r '(.asr // .asr_percent // (.stats // {}).asr // "unknown") | tostring' red_team_report.json)
-          STATUS=$(jq -r '.status // "UNKNOWN"' red_team_report.json)
-          echo "asr=${ASR}" >> "$GITHUB_OUTPUT"
-          echo "status=${STATUS}" >> "$GITHUB_OUTPUT"
-
-      - name: Comment on PR (if triggered from a PR)
-        if: github.event_name == 'pull_request' && always()
-        uses: actions/github-script@v7
-        env:
-          REPORT_STATUS: ${{ steps.summary.outputs.status }}
-          REPORT_ASR: ${{ steps.summary.outputs.asr }}
-        with:
-          script: |
-            const status = process.env.REPORT_STATUS;
-            const asr = process.env.REPORT_ASR;
-            const body = [
-              '### Prisma AIRS Red Teaming Scan',
-              '',
-              '- Status: `' + status + '`',
-              '- Attack Success Rate: `' + asr + '`',
-              '',
-              'Full report attached as the `red-team-scan-report` workflow artifact.',
-            ].join('\n');
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: context.issue.number,
-              body,
-            });
+        run: python ci_report.py summary
