@@ -370,16 +370,44 @@ def api_request(
 
 
 def list_targets(mgmt_base: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
-    """Return the tenant's registered Red Teaming targets (mgmt plane)."""
+    """Walk target pages using skip/limit and pagination.total_items."""
     url = f"{mgmt_base}{TARGET_PATH}"
-    # The listing endpoint caps `limit` at 100; larger values 422.
-    response = api_request("GET", url, headers, params={"limit": 100}, timeout=60)
-    response.raise_for_status()
-    body = response.json()
-    # Listing shape: {pagination, data: [...]}; be tolerant of a bare list too.
-    if isinstance(body, list):
-        return body
-    return body.get("data") or []
+    targets: List[Dict[str, Any]] = []
+    seen: Set[str] = set()
+    skip, limit = 0, 100
+    # Bound discovery if the service ignores offsets or changes continuously.
+    for _ in range(1000):
+        response = api_request("GET", url, headers, params={"limit": limit, "skip": skip}, timeout=60)
+        body = response.json()
+        if isinstance(body, list):
+            return body  # Legacy unpaginated response.
+        if not isinstance(body, dict):
+            raise ValueError("Target listing must be an object or list.")
+        page = body.get("data") or []
+        pagination = body.get("pagination") or {}
+        if not isinstance(page, list) or not isinstance(pagination, dict):
+            raise ValueError("Invalid target listing or pagination metadata.")
+        total = pagination.get("total_items")
+        if total is not None and (type(total) is not int or total < 0):
+            raise ValueError("Target total_items must be a nonnegative integer.")
+        if not page:
+            if total is not None and skip < total:
+                raise ValueError("Target pagination ended before all targets were returned.")
+            return targets
+        for target in page:
+            uuid = target.get("uuid") if isinstance(target, dict) else None
+            if not isinstance(uuid, str) or not uuid:
+                raise ValueError("Target listing contains an invalid target UUID.")
+            if uuid in seen:
+                raise ValueError("Target listing repeated a target; retry discovery.")
+            seen.add(uuid)
+        targets.extend(page)
+        skip += len(page)
+        if total is not None and skip >= total:
+            return targets
+        if total is None and len(page) < limit:
+            return targets
+    raise RuntimeError("Target listing exceeded the pagination limit.")
 
 
 def list_categories(data_base: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:

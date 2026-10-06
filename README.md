@@ -38,6 +38,8 @@ python redteam_scan.py \
   --fail-on-categories PROMPT_INJECTION,JAILBREAK
 ```
 
+`--list-targets` follows the API pagination instead of stopping at the first 100 targets.
+
 Runtime dependencies and their transitive dependencies are pinned in `requirements.txt`. Dependabot checks dependency and GitHub Actions updates weekly.
 
 ## Policy behavior
