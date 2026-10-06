@@ -111,11 +111,43 @@ def test_poll_sleep_respects_remaining_budget():
     sleep.assert_called_once_with(1)
 
 
-@pytest.mark.parametrize("statuses", [[401, 200], [503, 200], [429, 200]])
+@pytest.mark.parametrize("statuses", [[401, 200], [403, 200], [503, 200], [429, 200]])
 def test_http_poll_recovers(tmp_path, statuses):
-    from test_policy_regressions import api, run_scan
-    with api({"asr": 0}, poll_status=list(statuses)) as calls, patch.object(rs.time, "sleep"):
+    from test_policy_regressions import EVIDENCE, api, run_scan
+    with api({"asr": 0, **EVIDENCE}, poll_status=list(statuses)) as calls, patch.object(rs.time, "sleep"):
         assert run_scan(tmp_path) == 0
     assert sum(call[:2] == ("GET", "/v1/scan/review-job") for call in calls) == 2
     assert sum(call[:2] == ("POST", "/v1/scan") for call in calls) == 1
-    assert sum(call[:2] == ("POST", "/token") for call in calls) == (2 if statuses[0] == 401 else 1)
+    assert sum(call[:2] == ("POST", "/token") for call in calls) == (2 if statuses[0] in (401, 403) else 1)
+
+
+@pytest.mark.parametrize("method", ["GET", "POST"])
+@pytest.mark.parametrize("status,headers,refreshes", [
+    (401, {}, True),
+    (403, {}, True),
+    (403, {"x-opa-decision": "true"}, True),
+    (403, {"x-opa-decision": "false"}, False),
+    (403, {"X-OPA-Decision": " FALSE "}, False),
+])
+def test_refresh_on_401_and_non_policy_403(method, status, headers, refreshes):
+    with patch.object(rs, "fetch_oauth_token", side_effect=["old", "new"]) as token:
+        auth = rs.AuthenticatedHeaders("id", "secret", "tsg")
+        replies = [response(status, {"message": "denied"}, headers), response(body={"uuid": "job"})]
+        with patch.object(rs.requests, method.lower(), side_effect=replies) as call:
+            if refreshes:
+                assert rs.api_request(method, "https://data.test/v1/scan", auth, timeout=5).json() == {"uuid": "job"}
+            else:
+                with pytest.raises(requests.HTTPError):
+                    rs.api_request(method, "https://data.test/v1/scan", auth, timeout=5)
+    assert token.call_count == (2 if refreshes else 1)
+    assert call.call_count == (2 if refreshes else 1)
+
+
+def test_repeated_403_refreshes_once():
+    with patch.object(rs, "fetch_oauth_token", return_value="token") as token:
+        auth = rs.AuthenticatedHeaders("id", "secret", "tsg")
+        with patch.object(rs.requests, "get", side_effect=lambda *a, **k: response(403)) as get:
+            with pytest.raises(requests.HTTPError):
+                rs.get_scan_status("https://data.test", auth, "job")
+    assert token.call_count == 2
+    assert get.call_count == 2

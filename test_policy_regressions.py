@@ -10,9 +10,13 @@ import pytest
 
 import redteam_scan as rs
 
+CATEGORIES = [{'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION'}, {'id': 'JAILBREAK'}]}]
+# Minimal executed-attack evidence; a STATIC report without it cannot pass.
+EVIDENCE = {'severity_report': {'total_attacks': 100}}
+
 
 @contextlib.contextmanager
-def api(report, state='COMPLETED', poll_status=200):
+def api(report, state='COMPLETED', poll_status=200, categories=None, job=None, create=None):
     calls = []
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -27,14 +31,18 @@ def api(report, state='COMPLETED', poll_status=200):
         def do_POST(self):
             body = self.rfile.read(int(self.headers.get('Content-Length', 0)))
             calls.append(('POST', self.path, body.decode()))
-            self.reply(200, {'access_token': 'dummy-review-token'} if self.path == '/token' else {'uuid': 'review-job'})
+            if self.path == '/token':
+                self.reply(200, {'access_token': 'dummy-review-token'})
+            else:
+                self.reply(*(create or (200, {'uuid': 'review-job'})))
         def do_GET(self):
             calls.append(('GET', self.path, None))
             if self.path == '/v1/categories':
-                self.reply(200, {'data': [{'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION'}, {'id': 'JAILBREAK'}]}]})
+                self.reply(200, {'data': CATEGORIES if categories is None else categories})
             elif self.path == '/v1/scan/review-job':
                 code = poll_status.pop(0) if isinstance(poll_status, list) else poll_status
-                self.reply(code, {'status': state, 'completed': 1, 'total': 100})
+                ok = {'status': state, 'completed': 1, 'total': 100, **(job or {})}
+                self.reply(code, ok if code == 200 else {'message': f'simulated {code}'})
             else:
                 self.reply(200, report)
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
@@ -62,11 +70,11 @@ def run_scan(tmp_path, extra=()):
     return rs.run(['--target-uuid', 'review-target', '--poll-interval', '1', '--report-out', str(tmp_path / 'report.json'), '--result-out', str(tmp_path / 'result.json'), *extra])
 
 @pytest.mark.parametrize('report,extra,expected', [
-    ({'asr': 1.09}, [], 0),
-    ({'asr': 14.17}, ['--scan-type', 'DYNAMIC'], 1),
-    ({'asr': 5.0}, [], 0),
-    ({'asr': 5.01}, [], 1),
-    ({'asr': 0.1, 'security_report': {'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION', 'successful': 1}]}}, ['--fail-on-categories', 'PROMPT_INJECTION'], 1),
+    ({'asr': 1.09, **EVIDENCE}, [], 0),
+    ({'asr': 14.17, 'total_goals': 10, 'total_streams': 60}, ['--scan-type', 'DYNAMIC'], 1),
+    ({'asr': 5.0, **EVIDENCE}, [], 0),
+    ({'asr': 5.01, **EVIDENCE}, [], 1),
+    ({'asr': 0.1, 'security_report': {'id': 'SECURITY', 'sub_categories': [{'id': 'PROMPT_INJECTION', 'successful': 1, 'failed': 9, 'total': 10}]}}, ['--fail-on-categories', 'PROMPT_INJECTION'], 1),
 ])
 def test_http_lifecycle(tmp_path, report, extra, expected):
     with api(report) as calls:
@@ -76,12 +84,16 @@ def test_http_lifecycle(tmp_path, report, extra, expected):
     assert create['target'] == {'uuid': 'review-target'}
     if '--scan-type' not in extra:
         assert create['job_metadata']['categories']['SECURITY'] == ['PROMPT_INJECTION', 'JAILBREAK']
+    else:
+        assert create['job_metadata'] == {'stream_breadth': 6, 'stream_depth': 10}
 
 @pytest.mark.parametrize('state', ['FAILED', 'ABORTED'])
 def test_failed_scan_is_error(tmp_path, state):
     with api({'asr': 0}, state):
         assert run_scan(tmp_path) == 2
-    assert json.loads((tmp_path / 'report.json').read_text())['status'] == state
+    saved = json.loads((tmp_path / 'report.json').read_text())
+    assert saved['status'] == state
+    assert set(saved) <= set(rs.JOB_SUMMARY_KEYS)
 
 @pytest.mark.parametrize('report', [{}, {'asr': None}, {'asr': 'bad'}, {'asr': 'NaN'}, {'asr': -1}, {'asr': False}])
 def test_invalid_asr_must_not_pass(tmp_path, report):
@@ -98,7 +110,7 @@ def test_partial_scan_must_not_pass_by_default(tmp_path):
         assert run_scan(tmp_path) != 0
 
 def test_compliance_group_policy_matches():
-    report = {'asr': 0.1, 'compliance_report': [{'id': 'OWASP', 'techniques': [{'id': 'LLM01', 'successful': 1}]}]}
+    report = {'asr': 0.1, 'compliance_report': [{'id': 'OWASP', 'techniques': [{'id': 'LLM01', 'successful': 1}]}], **EVIDENCE}
     assert rs.evaluate_policy(report, 5, {'COMPLIANCE'})
 
 def test_misspelled_guardrail_must_not_pass(tmp_path):
@@ -143,13 +155,13 @@ def test_dynamic_rejects_category_options_without_api_calls(tmp_path, extra):
 
 @pytest.mark.parametrize("count", [None, "bad", -1, 0.5, False])
 def test_invalid_success_counts_are_not_clean_results(count):
-    report = {"asr": 0, "security_report": {"id": "SECURITY", "sub_categories": [{"id": "JAILBREAK", "successful": count}]}}
+    report = {"asr": 0, "security_report": {"id": "SECURITY", "sub_categories": [{"id": "JAILBREAK", "successful": count}]}, **EVIDENCE}
     with pytest.raises(ValueError):
         rs.evaluate_policy(report, 5, {"JAILBREAK"})
 
 
 def test_missing_success_count_is_not_clean_result():
-    report = {"asr": 0, "security_report": {"id": "SECURITY", "sub_categories": [{"id": "JAILBREAK"}]}}
+    report = {"asr": 0, "security_report": {"id": "SECURITY", "sub_categories": [{"id": "JAILBREAK"}]}, **EVIDENCE}
     with pytest.raises(ValueError, match="No measured results"):
         rs.evaluate_policy(report, 5, {"JAILBREAK"})
 
@@ -166,7 +178,7 @@ def test_deployment_mismatch_stops_before_auth(tmp_path, extra):
 
 
 def test_matching_deployment_identity_is_recorded(tmp_path):
-    with api({'asr': 0}):
+    with api({'asr': 0, **EVIDENCE}):
         assert run_scan(tmp_path, ['--expected-sha', 'a' * 40, '--deployed-sha', 'a' * 40]) == 0
     result = json.loads((tmp_path / 'result.json').read_text())
     assert result['expected_sha'] == result['deployed_sha'] == 'a' * 40
