@@ -89,3 +89,11 @@ def test_dispatch_wait_budget_fits_the_job(tmp_path, wait, ok):
     code, args = dispatch(tmp_path, MAX_WAIT_MINUTES=wait)
     assert (code == 0) is ok
     assert (args is not None) is ok
+
+
+def test_release_version_is_consistent():
+    # The examples pull the scanner by tag, so a version bump must move them too.
+    import redteam_scan as rs
+    assert f'## [{rs.__version__}]' in (REPO / 'CHANGELOG.md').read_text()
+    for path in EXAMPLES:
+        assert f'ref: v{rs.__version__}' in path.read_text(), path.name

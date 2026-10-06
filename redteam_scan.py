@@ -55,6 +55,8 @@ from tenacity import (
 
 # --- Constants -------------------------------------------------------------
 
+__version__ = "0.2.0"
+
 # AIRS Red Teaming has two base URLs sharing one OAuth token:
 #   DATA plane  -> scan jobs, reports, categories
 #   MGMT plane  -> targets, dashboard
@@ -292,6 +294,7 @@ Examples:
     )
     parser.add_argument("--expected-sha", help="Full commit SHA that the deployment must serve.")
     parser.add_argument("--deployed-sha", help="Full commit SHA verified by the trusted deployment job.")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.add_argument(
         "--list-targets",
         action="store_true",
@@ -1002,6 +1005,7 @@ def run(argv: Optional[List[str]] = None) -> int:
 
     result: Dict[str, Any] = {
         "schema_version": 1,
+        "scanner_version": __version__,
         "scan_uuid": None,
         "target_uuid": args.target_uuid,
         # An attached scan's type comes from its job record unless given.
