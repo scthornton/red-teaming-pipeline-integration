@@ -15,7 +15,7 @@ on:
           - STATIC
           - DYNAMIC
       categories:
-        description: 'STATIC only. Comma-separated category groups or subcategory ids to scan (e.g. SECURITY or PROMPT_INJECTION). Empty = full attack library.'
+        description: 'STATIC only. Comma-separated category groups or subcategory ids to scan (e.g. SECURITY or PROMPT_INJECTION). Empty = the attack library categories SCM preselects.'
         required: false
         default: ''
       max_asr_percent:
@@ -27,9 +27,13 @@ on:
         required: false
         default: ''
       max_wait_minutes:
-        description: 'How long to wait for the scan to finish before timing out'
+        description: 'How long to wait for the scan to finish before timing out (1-300)'
         required: false
-        default: '60'
+        default: '240'
+      scan_uuid:
+        description: 'Optional. Evaluate an existing scan instead of starting a new one (scan type and categories come from that scan).'
+        required: false
+        default: ''
 
   # To enable scheduled scans, set vars.RED_TEAM_TARGET_UUID first.
   # schedule:
@@ -45,9 +49,10 @@ concurrency:
 jobs:
   red_teaming_scan:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 330
     steps:
       - name: Checkout
+        id: checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -71,28 +76,36 @@ jobs:
           SCAN_CATEGORIES: ${{ inputs.categories }}
           MAX_ASR_PERCENT: ${{ inputs.max_asr_percent || '5.0' }}
           FAIL_ON_CATEGORIES: ${{ inputs.fail_on_categories }}
-          MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes || '60' }}
+          MAX_WAIT_MINUTES: ${{ inputs.max_wait_minutes || '240' }}
+          SCAN_UUID: ${{ inputs.scan_uuid }}
         run: |
-          if [[ ! "$MAX_WAIT_MINUTES" =~ ^([1-9]|[1-6][0-9]|7[0-5])$ ]]; then
-            echo "Max wait must be between 1 and 75 minutes for this 90-minute job."
+          if [[ ! "$MAX_WAIT_MINUTES" =~ ^([1-9]|[1-9][0-9]|[12][0-9][0-9]|300)$ ]]; then
+            echo "Max wait must be between 1 and 300 minutes for this 330-minute job."
             exit 2
           fi
-          python redteam_scan.py \
-            --target-uuid "$TARGET_UUID" \
-            --scan-type "$SCAN_TYPE" \
-            --categories "$SCAN_CATEGORIES" \
-            --max-asr-percent "$MAX_ASR_PERCENT" \
-            --fail-on-categories "$FAIL_ON_CATEGORIES" \
+          args=(
+            --target-uuid "$TARGET_UUID"
+            --max-asr-percent "$MAX_ASR_PERCENT"
+            --fail-on-categories "$FAIL_ON_CATEGORIES"
+            --poll-interval 60
             --max-wait-minutes "$MAX_WAIT_MINUTES"
+          )
+          if [[ -n "$SCAN_UUID" ]]; then
+            args+=(--scan-uuid "$SCAN_UUID")
+          else
+            args+=(--scan-type "$SCAN_TYPE" --categories "$SCAN_CATEGORIES")
+          fi
+          python redteam_scan.py "${args[@]}"
       - name: Upload Scan Report
-        if: always()
+        if: always() && steps.checkout.outcome == 'success'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: red-team-scan-report
+          name: red-team-scan-report-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             red_team_report.json
             red_team_result.json
+          if-no-files-found: ignore
           retention-days: 14
       - name: Summarize scan
-        if: always()
+        if: always() && steps.checkout.outcome == 'success'
         run: python ci_report.py summary
