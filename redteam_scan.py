@@ -35,6 +35,8 @@ import math
 import os
 import sys
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import requests
@@ -281,6 +283,79 @@ def auth_headers(token: str) -> Dict[str, str]:
     }
 
 
+class AuthenticatedHeaders(dict):
+    """Keep refreshed credentials shared by discovery, polling, and reports."""
+
+    def __init__(self, client_id: str, client_secret: str, tsg_id: str):
+        super().__init__()
+        self._credentials = (client_id, client_secret, tsg_id)
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.update(auth_headers(fetch_oauth_token(*self._credentials)))
+
+
+def retry_delay(response: Optional[requests.Response], attempt: int) -> float:
+    fallback = min(2 ** attempt, 10)
+    if response is None:
+        return fallback
+    value = response.headers.get("Retry-After")
+    if not value:
+        return fallback
+    try:
+        delay = float(value)
+        if not math.isfinite(delay):
+            return fallback
+    except ValueError:
+        try:
+            delay = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, OverflowError):
+            return fallback
+    # Do not retry sooner than requested. Long waits are left to the operator.
+    if delay > 120:
+        response.raise_for_status()
+    return max(0, delay)
+
+
+def api_request(
+    method: str, url: str, headers: Dict[str, str], *, timeout: float,
+    deadline: Optional[float] = None, **kwargs: Any,
+) -> requests.Response:
+    """Retry safe reads and refresh once on 401, without replaying ambiguous POSTs."""
+    refreshed = False
+    failures = 0
+    while True:
+        remaining = deadline - time.monotonic() if deadline is not None else timeout
+        if remaining <= 0:
+            raise TimeoutError("Scan polling deadline exceeded.")
+        response = None
+        try:
+            request = requests.get if method == "GET" else requests.post
+            response = request(url, headers=headers, timeout=min(timeout, remaining), **kwargs)
+            if response.status_code == 401 and isinstance(headers, AuthenticatedHeaders) and not refreshed:
+                response.close()
+                headers.refresh()
+                refreshed = True
+                continue
+            response.raise_for_status()
+            return response
+        except (requests.ConnectionError, requests.Timeout):
+            if method != "GET" or failures >= 2:
+                raise
+        except requests.HTTPError:
+            if method != "GET" or failures >= 2 or response.status_code not in {429, 500, 502, 503, 504}:
+                raise
+        try:
+            delay = retry_delay(response, failures)
+        finally:
+            if response is not None:
+                response.close()
+        if deadline is not None and time.monotonic() + delay >= deadline:
+            raise TimeoutError("Scan polling deadline exceeded during retry.")
+        time.sleep(delay)
+        failures += 1
+
+
 # --- Discovery (targets + categories) --------------------------------------
 
 
@@ -288,7 +363,7 @@ def list_targets(mgmt_base: str, headers: Dict[str, str]) -> List[Dict[str, Any]
     """Return the tenant's registered Red Teaming targets (mgmt plane)."""
     url = f"{mgmt_base}{TARGET_PATH}"
     # The listing endpoint caps `limit` at 100; larger values 422.
-    response = requests.get(url, headers=headers, params={"limit": 100}, timeout=60)
+    response = api_request("GET", url, headers, params={"limit": 100}, timeout=60)
     response.raise_for_status()
     body = response.json()
     # Listing shape: {pagination, data: [...]}; be tolerant of a bare list too.
@@ -300,7 +375,7 @@ def list_targets(mgmt_base: str, headers: Dict[str, str]) -> List[Dict[str, Any]
 def list_categories(data_base: str, headers: Dict[str, str]) -> List[Dict[str, Any]]:
     """Return the canonical attack-category vocabulary (data plane)."""
     url = f"{data_base}{CATEGORIES_PATH}"
-    response = requests.get(url, headers=headers, timeout=60)
+    response = api_request("GET", url, headers, timeout=60)
     response.raise_for_status()
     body = response.json()
     if isinstance(body, list):
@@ -369,12 +444,6 @@ def build_job_metadata(
     return {}
 
 
-@retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=4, max=10),
-    retry=retry_if_exception_type((requests.ConnectionError, requests.Timeout)),
-    reraise=True,
-)
 def start_scan(
     data_base: str,
     headers: Dict[str, str],
@@ -399,7 +468,13 @@ def start_scan(
 
     url = f"{data_base}{SCAN_PATH}"
     print(f"   POST {url}  (job_type={job_type})")
-    response = requests.post(url, headers=headers, json=payload, timeout=60)
+    try:
+        response = api_request("POST", url, headers, json=payload, timeout=60)
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        raise RuntimeError(
+            "Scan submission outcome is unknown. Check SCM for the job before "
+            "starting another scan; the create request was not retried."
+        ) from exc
     response.raise_for_status()
     body = response.json()
 
@@ -411,10 +486,13 @@ def start_scan(
     return scan_uuid
 
 
-def get_scan_status(data_base: str, headers: Dict[str, str], scan_uuid: str) -> Dict[str, Any]:
+def get_scan_status(
+    data_base: str, headers: Dict[str, str], scan_uuid: str,
+    deadline: Optional[float] = None,
+) -> Dict[str, Any]:
     """Fetch current scan/job state for polling (data plane)."""
     url = f"{data_base}{SCAN_PATH}/{scan_uuid}"
-    response = requests.get(url, headers=headers, timeout=30)
+    response = api_request("GET", url, headers, timeout=30, deadline=deadline)
     response.raise_for_status()
     return response.json()
 
@@ -431,11 +509,11 @@ def poll_until_terminal(
 
     Returns the final job-state object.
     """
-    deadline = time.time() + (max_wait_minutes * 60)
+    deadline = time.monotonic() + (max_wait_minutes * 60)
     poll_count = 0
-    while time.time() < deadline:
+    while time.monotonic() < deadline:
         poll_count += 1
-        state = get_scan_status(data_base, headers, scan_uuid)
+        state = get_scan_status(data_base, headers, scan_uuid, deadline=deadline)
         status = str(state.get("status", "UNKNOWN")).upper()
         # JobResponse exposes completed/total counters.
         completed = state.get("completed", state.get("progress", "?"))
@@ -445,7 +523,7 @@ def poll_until_terminal(
         if status in TERMINAL_STATUSES:
             return state
 
-        time.sleep(poll_interval)
+        time.sleep(min(poll_interval, max(0, deadline - time.monotonic())))
 
     raise TimeoutError(
         f"Scan {scan_uuid} did not reach a terminal state within {max_wait_minutes} minutes."
@@ -463,7 +541,7 @@ def fetch_report(
         url = f"{data_base}{REPORT_DYNAMIC_PATH}/{scan_uuid}/report"
     else:
         url = f"{data_base}{REPORT_STATIC_PATH}/{scan_uuid}/report"
-    response = requests.get(url, headers=headers, timeout=120)
+    response = api_request("GET", url, headers, timeout=120)
     response.raise_for_status()
     return response.json()
 
@@ -674,8 +752,7 @@ def run(argv: Optional[List[str]] = None) -> int:
             return EXIT_ERROR
 
     try:
-        token = fetch_oauth_token(client_id, client_secret, tsg_id)
-        headers = auth_headers(token)
+        headers = AuthenticatedHeaders(client_id, client_secret, tsg_id)
         print("Authenticated.")
 
         # --- Discovery modes (list and exit) ------------------------------
