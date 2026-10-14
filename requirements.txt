@@ -1,6 +1,6 @@
 # Runtime packages and their transitive dependencies, tested on Python 3.12.
 requests==2.34.2
-tenacity==9.1.4
+tenacity==9.2.1
 certifi==2026.7.22
 charset-normalizer==3.5.2
 idna==3.20
